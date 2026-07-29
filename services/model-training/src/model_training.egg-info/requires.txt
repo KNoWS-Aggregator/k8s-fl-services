@@ -1,0 +1,7 @@
+common
+fastapi>=0.110
+uvicorn>=0.29
+keras
+tensorflow
+tensorflow-probability
+scikit-learn>=1.4

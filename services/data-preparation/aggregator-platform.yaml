@@ -1,0 +1,143 @@
+fnoDescriptions:
+  data-preparation:
+    type: function
+    serviceConfigurationRef:
+      name: data-preparation
+    description: |
+      @prefix fno: <https://w3id.org/function/ontology#> .
+      @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+      <DataPreparation>
+        a fno:Function ;
+        fno:expects ( <Sources> <Dataset> <Authn> <PollEnabled> <PollInterval> ) ;
+        fno:returns ( <PreparedData> ) .
+
+      <Sources>
+        a fno:Parameter ;
+        fno:type xsd:anyURI ;
+        fno:predicate <sources> ;
+        fno:required "true"^^xsd:boolean .
+
+      <Dataset>
+        a fno:Parameter ;
+        fno:type xsd:string ;
+        fno:predicate <dataset> ;
+        fno:required "true"^^xsd:boolean .
+
+      <Authn>
+        a fno:Parameter ;
+        fno:type xsd:anyURI ;
+        fno:predicate <authn> ;
+        fno:required "true"^^xsd:boolean .
+
+      <PollEnabled>
+        a fno:Parameter ;
+        fno:type xsd:boolean ;
+        fno:predicate <pollEnabled> ;
+        fno:required "false"^^xsd:boolean .
+
+      <PollInterval>
+        a fno:Parameter ;
+        fno:type xsd:string ;
+        fno:predicate <pollInterval> ;
+        fno:required "false"^^xsd:boolean .
+
+      <PreparedData>
+        a fno:Output ;
+        fno:predicate <preparedData> .
+
+serviceConfigurations:
+  data-preparation:
+    inputMapping:
+      ":sources":
+        id: SOURCES
+      ":dataset":
+        id: DATASET
+      ":authn":
+        id: AUTHN
+      ":pollEnabled":
+        id: POL_ENABLED
+      ":pollInterval":
+        id: POLL_INTERVAL
+
+    outputMapping:
+      ":preparedData":
+        dataset:
+          title: "Prepared Kvasir Data"
+          description: "Aggregated accelerometer and ground-truth data converted to Parquet."
+        distribution:
+          title: "Prepared Kvasir Data Archive"
+          description: "ZIP archive containing accel.parquet and gt.parquet."
+          access:
+            urlType: downloadURL
+            servicePort: 8080
+            internalPath: /results
+            externalPath: /results
+            protocol: http
+
+    serviceMapping:
+      dataservice:
+        title: "Kvasir Data Preparation Service"
+        description: "Continuously polls a Kvasir case slice and incrementally prepares participant data."
+
+      orchestration:
+        type: Deployment
+        spec:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: data-preparation
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: data-preparation
+            template:
+              metadata:
+                labels:
+                  app: data-preparation
+              spec:
+                securityContext:
+                  fsGroup: 65532
+                containers:
+                  - name: data-preparation
+                    image: ghcr.io/knows-aggregator/data-preparation:latest
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                      - name: http
+                        containerPort: 8080
+                        protocol: TCP
+                    env:
+                      - name: SOURCES
+                        value: "$(SOURCES)"
+                      - name: DATASET
+                        value: "$(DATASET)"
+                      - name: AUTHN
+                        value: "$(AUTHN)"
+                      - name: DATA_DIR
+                        value: /app/data
+                      - name: POL_ENABLED
+                        value: "$(POL_ENABLED)"
+                      - name: POLL_INTERVAL
+                        value: "$(POLL_INTERVAL)"
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                      initialDelaySeconds: 10
+                      periodSeconds: 30
+                    volumeMounts:
+                      - name: data
+                        mountPath: /app/data
+                volumes:
+                  - name: data
+                    persistentVolumeClaim:
+                      claimName: data-preparation-data
