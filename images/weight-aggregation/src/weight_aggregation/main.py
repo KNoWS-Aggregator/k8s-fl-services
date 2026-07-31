@@ -1,0 +1,775 @@
+"""Long-running HTTP coordinator for federated averaging sessions."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import httpx
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
+from pydantic import BaseModel, Field
+
+from common.messages import (
+    ClientSessionEnd,
+    ClientSessionStart,
+    EvaluationFailureMessage,
+    EvaluationResultMessage,
+    MessageType,
+    TrainingConfig,
+    TrainingFailureMessage,
+    TrainingResultMessage,
+)
+from common.weight_io import bytes_to_weights, weights_to_bytes
+from fl_model import create_initial_weights, weight_signature
+
+from .aggregate import aggregate_evaluation_metrics, federated_average
+from .client_config import TRAINING_CLIENT_BASE_URLS
+from .dispatch import dispatch_evaluation, dispatch_round
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
+
+TRAIN_PATH = "/train"
+CLIENT_SESSION_START_PATH = "/session/start"
+CLIENT_SESSION_END_PATH = "/session/end"
+RESULT_PATH = "/training-results"
+EVALUATE_PATH = "/evaluate"
+EVALUATION_RESULT_PATH = "/evaluation-results"
+
+
+class SessionStartRequest(BaseModel):
+    expected_rounds: int = Field(ge=1)
+    min_clients: int = Field(default=1, ge=1)
+    round_timeout_seconds: float = Field(default=3600, gt=0)
+    training_config: TrainingConfig = Field(default_factory=TrainingConfig)
+
+
+@dataclass
+class ActiveSession:
+    session_id: str
+    request: SessionStartRequest
+    all_clients: dict[str, str]
+    active_clients: dict[str, str]
+    model_signature: str
+    current_round: int = 0
+    global_weights: bytes = b""
+    expected_clients: set[str] = field(default_factory=set)
+    weights_by_client: dict[str, bytes] = field(default_factory=dict)
+    metrics_by_client: dict = field(default_factory=dict)
+    current_aggregated_weights: bytes = b""
+    failed_clients: dict[str, str] = field(default_factory=dict)
+    phase: str = "training"
+    evaluation_metrics_by_client: dict = field(default_factory=dict)
+    aggregated_evaluation_metrics: dict[str, Any] = field(default_factory=dict)
+    timer: threading.Timer | None = None
+
+
+app = FastAPI(title="Federated weight aggregation", version="0.1.0")
+_coordinator_lock = threading.RLock()
+_active: ActiveSession | None = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _data_dir() -> Path:
+    return Path(os.getenv("DATA_DIR", "/app/data")) / "weight-aggregation"
+
+
+def _status_path() -> Path:
+    return _data_dir() / "status.json"
+
+
+def _global_weights_path() -> Path:
+    return _data_dir() / "global-weights.npz"
+
+
+def _global_metadata_path() -> Path:
+    return _data_dir() / "global-weights.json"
+
+
+def _session_dir(session_id: str) -> Path:
+    return _data_dir() / "sessions" / session_id
+
+
+def _callback_url() -> str:
+    base = os.getenv("PUBLIC_BASE_URL", "http://weight-aggregation:8080").rstrip("/")
+    return f"{base}{RESULT_PATH}"
+
+
+def _evaluation_callback_url() -> str:
+    base = os.getenv("PUBLIC_BASE_URL", "http://weight-aggregation:8080").rstrip("/")
+    return f"{base}{EVALUATION_RESULT_PATH}"
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _write_status(payload: dict[str, Any]) -> None:
+    _write_json(_status_path(), payload)
+
+
+def _read_status() -> dict[str, Any]:
+    if not _status_path().is_file():
+        return {"status": "idle"}
+    return json.loads(_status_path().read_text(encoding="utf-8"))
+
+
+def _persist_session(session: ActiveSession, state: str) -> None:
+    _write_json(
+        _session_dir(session.session_id) / "session.json",
+        {
+            "session_id": session.session_id,
+            "status": state,
+            "expected_rounds": session.request.expected_rounds,
+            "min_clients": session.request.min_clients,
+            "round_timeout_seconds": session.request.round_timeout_seconds,
+            "training_config": session.request.training_config.model_dump(mode="json"),
+            "current_round": session.current_round,
+            "all_clients": session.all_clients,
+            "active_clients": session.active_clients,
+            "failed_clients": session.failed_clients,
+            "phase": session.phase,
+            "aggregated_evaluation_metrics": session.aggregated_evaluation_metrics,
+            "model_signature": session.model_signature,
+            "updated_at": _now(),
+        },
+    )
+
+
+def _initial_global_weights() -> tuple[bytes, str, str]:
+    path = _global_weights_path()
+    if path.is_file():
+        payload = path.read_bytes()
+        signature = weight_signature(bytes_to_weights(payload))
+        metadata_path = _global_metadata_path()
+        if metadata_path.is_file():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("model_signature") != signature:
+                raise RuntimeError(
+                    "Persisted global weights do not match the current canonical model"
+                )
+        return payload, signature, "previous_session"
+    weights, signature = create_initial_weights()
+    return weights_to_bytes(weights), signature, "fresh_model"
+
+
+def _client_post(base_url: str, path: str, message: BaseModel) -> dict:
+    response = httpx.post(
+        f"{base_url.rstrip('/')}{path}",
+        json=message.model_dump(mode="json"),
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _release_clients(session: ActiveSession) -> None:
+    for client_id, base_url in session.all_clients.items():
+        try:
+            _client_post(
+                base_url,
+                CLIENT_SESSION_END_PATH,
+                ClientSessionEnd(session_id=session.session_id, client_id=client_id),
+            )
+        except Exception:
+            logger.exception("Could not release client %s at %s", client_id, base_url)
+
+
+def _bootstrap_session(session_id: str, request: SessionStartRequest) -> None:
+    global _active
+    assigned = {
+        str(uuid.uuid4()): base_url
+        for base_url in TRAINING_CLIENT_BASE_URLS
+    }
+    initializing = ActiveSession(
+        session_id=session_id,
+        request=request,
+        all_clients=assigned,
+        active_clients={},
+        model_signature="",
+    )
+    _persist_session(initializing, "initializing")
+    accepted: dict[str, str] = {}
+    signatures: dict[str, str] = {}
+    for client_id, base_url in assigned.items():
+        try:
+            response = _client_post(
+                base_url,
+                CLIENT_SESSION_START_PATH,
+                ClientSessionStart(
+                    session_id=session_id,
+                    client_id=client_id,
+                    expected_rounds=request.expected_rounds,
+                    training_config=request.training_config,
+                ),
+            )
+            signatures[client_id] = response["model_signature"]
+            accepted[client_id] = base_url
+        except Exception as exc:
+            logger.exception("Client session start failed at %s", base_url)
+
+    try:
+        global_weights, canonical_signature, source = _initial_global_weights()
+        accepted = {
+            client_id: base_url
+            for client_id, base_url in accepted.items()
+            if signatures[client_id] == canonical_signature
+        }
+        if len(accepted) < request.min_clients:
+            raise RuntimeError(
+                f"Only {len(accepted)} compatible clients started; "
+                f"minimum is {request.min_clients}"
+            )
+        session = ActiveSession(
+            session_id=session_id,
+            request=request,
+            all_clients=assigned,
+            active_clients=accepted.copy(),
+            model_signature=canonical_signature,
+            global_weights=global_weights,
+        )
+        with _coordinator_lock:
+            _active = session
+            _write_status(
+                {
+                    "status": "running",
+                    "session_id": session_id,
+                    "current_round": 0,
+                    "expected_rounds": request.expected_rounds,
+                    "initial_weights_source": source,
+                    "started_at": _now(),
+                }
+            )
+            _persist_session(session, "running")
+        _start_round(session)
+    except Exception as exc:
+        logger.exception("Could not bootstrap session %s", session_id)
+        temporary = ActiveSession(
+            session_id=session_id,
+            request=request,
+            all_clients=assigned,
+            active_clients=accepted,
+            model_signature="",
+        )
+        _release_clients(temporary)
+        with _coordinator_lock:
+            _active = None
+            _write_status(
+                {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "error": str(exc),
+                    "finished_at": _now(),
+                }
+            )
+
+
+def _start_round(session: ActiveSession) -> None:
+    with _coordinator_lock:
+        if _active is not session:
+            return
+        session.current_round += 1
+        session.expected_clients = set(session.active_clients)
+        session.weights_by_client = {}
+        session.metrics_by_client = {}
+        session.current_aggregated_weights = b""
+        session.evaluation_metrics_by_client = {}
+        session.aggregated_evaluation_metrics = {}
+        session.phase = "training"
+        round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
+        round_dir.mkdir(parents=True, exist_ok=True)
+        (round_dir / "global-input.npz").write_bytes(session.global_weights)
+        _persist_session(session, "running")
+        _write_status(
+            {
+                "status": "running",
+                "session_id": session.session_id,
+                "current_round": session.current_round,
+                "expected_rounds": session.request.expected_rounds,
+                "active_clients": len(session.active_clients),
+                "phase": session.phase,
+                "started_at": _now(),
+            }
+        )
+    failed = dispatch_round(
+        session_id=session.session_id,
+        round_id=session.current_round,
+        client_urls={
+            client_id: f"{base_url.rstrip('/')}{TRAIN_PATH}"
+            for client_id, base_url in session.active_clients.items()
+        },
+        global_weights=session.global_weights,
+        reply_url=_callback_url(),
+    )
+    for client_id in failed:
+        _record_failure(session.session_id, session.current_round, client_id, "dispatch failed")
+    with _coordinator_lock:
+        if _active is session and session.expected_clients:
+            timer = threading.Timer(
+                session.request.round_timeout_seconds,
+                _round_timeout,
+                args=(session.session_id, session.current_round),
+            )
+            timer.daemon = True
+            session.timer = timer
+            timer.start()
+
+
+def _record_failure(session_id: str, round_id: int, client_id: str, error: str) -> None:
+    with _coordinator_lock:
+        session = _active
+        if not session or session.session_id != session_id or session.current_round != round_id:
+            return
+        if session.phase != "training":
+            return
+        if client_id not in session.expected_clients:
+            return
+        if client_id in session.weights_by_client:
+            return
+        session.expected_clients.discard(client_id)
+        session.active_clients.pop(client_id, None)
+        session.failed_clients[client_id] = error
+        _advance_if_ready(session)
+
+
+def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
+    with _coordinator_lock:
+        session = _active
+        if not session or result.session_id != session.session_id:
+            raise ValueError("Result belongs to no active session")
+        if result.round_id != session.current_round:
+            raise ValueError("Result belongs to a stale or future round")
+        if session.phase != "training":
+            raise ValueError("Session is not collecting training results")
+        if result.client_id not in session.expected_clients:
+            raise ValueError("Result is from an unexpected or removed client")
+        if result.client_id in session.weights_by_client:
+            return
+        if weight_signature(bytes_to_weights(weights)) != session.model_signature:
+            _record_failure(
+                result.session_id,
+                result.round_id,
+                result.client_id,
+                "model weight structure does not match the session",
+            )
+            return
+        session.weights_by_client[result.client_id] = weights
+        session.metrics_by_client[result.client_id] = result.metrics
+        round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
+        client_dir = round_dir / "clients" / result.client_id
+        client_dir.mkdir(parents=True, exist_ok=True)
+        (client_dir / "weights.npz").write_bytes(weights)
+        _write_json(client_dir / "metrics.json", result.metrics.model_dump(mode="json"))
+        try:
+            session.current_aggregated_weights = federated_average(
+                session.weights_by_client,
+                session.metrics_by_client,
+            )
+        except Exception as exc:
+            _finish_session(session, False, f"Weight aggregation failed: {exc}")
+            return
+        (round_dir / "aggregate-current.npz").write_bytes(
+            session.current_aggregated_weights
+        )
+        _advance_if_ready(session)
+
+
+def _advance_if_ready(session: ActiveSession) -> None:
+    if len(session.active_clients) < session.request.min_clients:
+        _finish_session(session, False, "Client count fell below min_clients")
+        return
+    if not session.expected_clients.issubset(session.weights_by_client):
+        return
+    if len(session.weights_by_client) < session.request.min_clients:
+        _finish_session(session, False, "Too few successful client results")
+        return
+    if session.timer:
+        session.timer.cancel()
+        session.timer = None
+    if not session.current_aggregated_weights:
+        _finish_session(session, False, "Weight aggregation produced no result")
+        return
+    session.global_weights = session.current_aggregated_weights
+    round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
+    (round_dir / "aggregated.npz").write_bytes(session.global_weights)
+    _start_evaluation(session)
+
+
+def _start_evaluation(session: ActiveSession) -> None:
+    with _coordinator_lock:
+        if _active is not session:
+            return
+        session.phase = "evaluation"
+        session.expected_clients = set(session.active_clients)
+        session.evaluation_metrics_by_client = {}
+        _persist_session(session, "running")
+        _write_status(
+            {
+                "status": "running",
+                "session_id": session.session_id,
+                "current_round": session.current_round,
+                "expected_rounds": session.request.expected_rounds,
+                "active_clients": len(session.active_clients),
+                "phase": session.phase,
+                "started_at": _now(),
+            }
+        )
+    failed = dispatch_evaluation(
+        session_id=session.session_id,
+        round_id=session.current_round,
+        client_urls={
+            client_id: f"{base_url.rstrip('/')}{EVALUATE_PATH}"
+            for client_id, base_url in session.active_clients.items()
+        },
+        global_weights=session.global_weights,
+        reply_url=_evaluation_callback_url(),
+    )
+    for client_id in failed:
+        _record_evaluation_failure(
+            session.session_id,
+            session.current_round,
+            client_id,
+            "evaluation dispatch failed",
+        )
+    with _coordinator_lock:
+        if _active is session and session.expected_clients:
+            timer = threading.Timer(
+                session.request.round_timeout_seconds,
+                _evaluation_timeout,
+                args=(session.session_id, session.current_round),
+            )
+            timer.daemon = True
+            session.timer = timer
+            timer.start()
+
+
+def _record_evaluation_failure(
+    session_id: str,
+    round_id: int,
+    client_id: str,
+    error: str,
+) -> None:
+    with _coordinator_lock:
+        session = _active
+        if (
+            not session
+            or session.session_id != session_id
+            or session.current_round != round_id
+            or session.phase != "evaluation"
+        ):
+            return
+        if client_id not in session.expected_clients:
+            return
+        if client_id in session.evaluation_metrics_by_client:
+            return
+        session.expected_clients.discard(client_id)
+        session.active_clients.pop(client_id, None)
+        session.failed_clients[client_id] = error
+        _advance_evaluation_if_ready(session)
+
+
+def _record_evaluation_result(result: EvaluationResultMessage) -> None:
+    with _coordinator_lock:
+        session = _active
+        if not session or result.session_id != session.session_id:
+            raise ValueError("Evaluation belongs to no active session")
+        if result.round_id != session.current_round:
+            raise ValueError("Evaluation belongs to a stale or future round")
+        if session.phase != "evaluation":
+            raise ValueError("Session is not collecting evaluation results")
+        if result.client_id not in session.expected_clients:
+            raise ValueError("Evaluation is from an unexpected or removed client")
+        if result.client_id in session.evaluation_metrics_by_client:
+            return
+        session.evaluation_metrics_by_client[result.client_id] = result.metrics
+        try:
+            session.aggregated_evaluation_metrics = aggregate_evaluation_metrics(
+                session.evaluation_metrics_by_client
+            )
+        except Exception as exc:
+            _finish_session(session, False, f"Evaluation aggregation failed: {exc}")
+            return
+        round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
+        client_dir = round_dir / "clients" / result.client_id
+        client_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            client_dir / "evaluation.json",
+            result.metrics.model_dump(mode="json"),
+        )
+        _advance_evaluation_if_ready(session)
+
+
+def _advance_evaluation_if_ready(session: ActiveSession) -> None:
+    if len(session.active_clients) < session.request.min_clients:
+        _finish_session(session, False, "Client count fell below min_clients during evaluation")
+        return
+    if not session.expected_clients.issubset(session.evaluation_metrics_by_client):
+        return
+    if len(session.evaluation_metrics_by_client) < session.request.min_clients:
+        _finish_session(session, False, "Too few successful evaluation results")
+        return
+    if session.timer:
+        session.timer.cancel()
+        session.timer = None
+    round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
+    _write_json(
+        round_dir / "aggregated-evaluation.json",
+        session.aggregated_evaluation_metrics,
+    )
+    _write_json(
+        _data_dir() / "evaluation-metrics.json",
+        {
+            "session_id": session.session_id,
+            "round_id": session.current_round,
+            "metrics": session.aggregated_evaluation_metrics,
+            "updated_at": _now(),
+        },
+    )
+    if session.current_round >= session.request.expected_rounds:
+        _finish_session(session, True)
+    else:
+        _start_round(session)
+
+
+def _round_timeout(session_id: str, round_id: int) -> None:
+    with _coordinator_lock:
+        session = _active
+        if not session or session.session_id != session_id or session.current_round != round_id:
+            return
+        if session.phase != "training":
+            return
+        missing = session.expected_clients - set(session.weights_by_client)
+        for client_id in missing:
+            session.active_clients.pop(client_id, None)
+            session.failed_clients[client_id] = "round timeout"
+        session.expected_clients -= missing
+        _advance_if_ready(session)
+
+
+def _evaluation_timeout(session_id: str, round_id: int) -> None:
+    with _coordinator_lock:
+        session = _active
+        if (
+            not session
+            or session.session_id != session_id
+            or session.current_round != round_id
+            or session.phase != "evaluation"
+        ):
+            return
+        missing = session.expected_clients - set(session.evaluation_metrics_by_client)
+        for client_id in missing:
+            session.active_clients.pop(client_id, None)
+            session.failed_clients[client_id] = "evaluation timeout"
+        session.expected_clients -= missing
+        _advance_evaluation_if_ready(session)
+
+
+def _finish_session(
+    session: ActiveSession,
+    success: bool,
+    error: str | None = None,
+) -> None:
+    global _active
+    if session.timer:
+        session.timer.cancel()
+        session.timer = None
+    if success:
+        path = _global_weights_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".npz.tmp")
+        temporary.write_bytes(session.global_weights)
+        temporary.replace(path)
+        _write_json(
+            _global_metadata_path(),
+            {
+                "session_id": session.session_id,
+                "model_signature": session.model_signature,
+                "completed_rounds": session.current_round,
+                "updated_at": _now(),
+            },
+        )
+    state = "succeeded" if success else "failed"
+    _persist_session(session, state)
+    _write_status(
+        {
+            "status": state,
+            "session_id": session.session_id,
+            "completed_rounds": session.current_round,
+            "failed_clients": session.failed_clients,
+            "evaluation_metrics": session.aggregated_evaluation_metrics,
+            "error": error,
+            "finished_at": _now(),
+        }
+    )
+    _active = None
+    threading.Thread(target=_release_clients, args=(session,), daemon=True).start()
+
+
+def _recover_interrupted_session() -> None:
+    current = _read_status()
+    if current.get("status") not in {"initializing", "running"}:
+        return
+    session_id = current.get("session_id")
+    session_path = _session_dir(session_id) / "session.json" if session_id else None
+    if session_path and session_path.is_file():
+        payload = json.loads(session_path.read_text(encoding="utf-8"))
+        for client_id, base_url in payload.get("all_clients", {}).items():
+            try:
+                _client_post(
+                    base_url,
+                    CLIENT_SESSION_END_PATH,
+                    ClientSessionEnd(session_id=session_id, client_id=client_id),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not release client %s from interrupted session", client_id
+                )
+    _write_status(
+        {
+            "status": "failed",
+            "session_id": session_id,
+            "error": "Aggregation service restarted during an active session",
+            "finished_at": _now(),
+        }
+    )
+
+
+@app.post("/session/start", status_code=status.HTTP_202_ACCEPTED)
+def session_start(
+    request: SessionStartRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    global _active
+    request = request.model_copy(
+        update={
+            "training_config": request.training_config.model_copy(
+                update={"num_rounds": request.expected_rounds}
+            )
+        }
+    )
+    with _coordinator_lock:
+        if _active is None:
+            _recover_interrupted_session()
+        if _active is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A federated session is already active",
+            )
+        if request.min_clients > len(TRAINING_CLIENT_BASE_URLS):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="min_clients exceeds configured training clients",
+            )
+        session_id = str(uuid.uuid4())
+        # Reserve the coordinator immediately while client bootstrap runs.
+        _active = ActiveSession(
+            session_id=session_id,
+            request=request,
+            all_clients={},
+            active_clients={},
+            model_signature="",
+        )
+        _write_status(
+            {"status": "initializing", "session_id": session_id, "started_at": _now()}
+        )
+    background_tasks.add_task(_bootstrap_session, session_id, request)
+    return {"status": "initializing", "session_id": session_id}
+
+
+@app.post("/training-results", status_code=status.HTTP_202_ACCEPTED)
+async def training_results(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict[str, str]:
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/"):
+        form = await request.form()
+        result = TrainingResultMessage.model_validate_json(str(form["message"]))
+        upload = form["weights"]
+        weights = await upload.read()
+        background_tasks.add_task(_record_result, result, weights)
+        return {"status": "accepted"}
+    payload = await request.json()
+    failure = TrainingFailureMessage.model_validate(payload)
+    background_tasks.add_task(
+        _record_failure,
+        failure.session_id,
+        failure.round_id,
+        failure.client_id,
+        failure.error,
+    )
+    return {"status": "accepted"}
+
+
+@app.post("/evaluation-results", status_code=status.HTTP_202_ACCEPTED)
+async def evaluation_results(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict[str, str]:
+    payload = await request.json()
+    if payload.get("type") == MessageType.EVALUATION_FAILURE.value:
+        failure = EvaluationFailureMessage.model_validate(payload)
+        background_tasks.add_task(
+            _record_evaluation_failure,
+            failure.session_id,
+            failure.round_id,
+            failure.client_id,
+            failure.error,
+        )
+    else:
+        result = EvaluationResultMessage.model_validate(payload)
+        background_tasks.add_task(_record_evaluation_result, result)
+    return {"status": "accepted"}
+
+
+@app.get("/healthz")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readiness() -> dict[str, str]:
+    try:
+        directory = _data_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / ".write-probe"
+        probe.touch()
+        probe.unlink()
+        if not TRAINING_CLIENT_BASE_URLS:
+            raise RuntimeError("No training client base URLs are configured")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "ready"}
+
+
+@app.get("/status")
+def session_status() -> dict[str, Any]:
+    return _read_status()
+
+
+@app.get("/evaluation-metrics")
+def aggregated_evaluation_metrics() -> dict[str, Any]:
+    path = _data_dir() / "evaluation-metrics.json"
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No aggregated evaluation metrics are available",
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))

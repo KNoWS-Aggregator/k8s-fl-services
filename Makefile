@@ -4,11 +4,11 @@ REGISTRY ?= ghcr.io
 GITHUB_ORG ?= knows-aggregator
 TAG ?= latest
 
-# Add a service here only after services/<name>/Dockerfile is ready to build.
-SERVICES := data-preparation
+# Add an image here only after images/<name>/Dockerfile is ready to build.
+IMAGES := data-preparation model-training weight-aggregation
 
 IMAGE_PREFIX := $(REGISTRY)/$(GITHUB_ORG)
-SELECTED_SERVICES := $(if $(strip $(CONTAINER)),$(strip $(CONTAINER)),$(SERVICES))
+SELECTED_IMAGES := $(if $(strip $(CONTAINER)),$(strip $(CONTAINER)),$(IMAGES))
 
 .PHONY: help containers-list containers-validate containers-login containers-build containers-push
 
@@ -20,22 +20,22 @@ help:
 	@echo "  make containers-push  [CONTAINER=<service>] [TAG=<tag>]"
 
 containers-list:
-	@for service in $(SERVICES); do \
-		echo "$(IMAGE_PREFIX)/$$service:$(TAG)"; \
+	@for image in $(IMAGES); do \
+		echo "$(IMAGE_PREFIX)/$$image:$(TAG)"; \
 	done
 
 containers-validate:
 	@if [ -n "$(strip $(CONTAINER))" ]; then \
-		case " $(SERVICES) " in \
+		case " $(IMAGES) " in \
 			*" $(strip $(CONTAINER)) "*) ;; \
-			*) echo "Unknown or unpublished service: $(strip $(CONTAINER))" >&2; \
-			   echo "Available services: $(SERVICES)" >&2; \
+			*) echo "Unknown or unpublished image: $(strip $(CONTAINER))" >&2; \
+			   echo "Available images: $(IMAGES)" >&2; \
 			   exit 2 ;; \
 		esac; \
 	fi
-	@for service in $(SELECTED_SERVICES); do \
-		test -f "services/$$service/Dockerfile" || { \
-			echo "Missing services/$$service/Dockerfile" >&2; \
+	@for image in $(SELECTED_IMAGES); do \
+		test -f "images/$$image/Dockerfile" || { \
+			echo "Missing images/$$image/Dockerfile" >&2; \
 			exit 2; \
 		}; \
 	done
@@ -47,19 +47,19 @@ containers-login:
 
 containers-build: containers-validate
 	@set -eu; \
-	for service in $(SELECTED_SERVICES); do \
-		image="$(IMAGE_PREFIX)/$$service:$(TAG)"; \
+	for name in $(SELECTED_IMAGES); do \
+		image="$(IMAGE_PREFIX)/$$name:$(TAG)"; \
 		echo "Building $$image"; \
 		docker build \
-			--file "services/$$service/Dockerfile" \
+			--file "images/$$name/Dockerfile" \
 			--tag "$$image" \
 			.; \
 	done
 
 containers-push: containers-build
 	@set -eu; \
-	for service in $(SELECTED_SERVICES); do \
-		image="$(IMAGE_PREFIX)/$$service:$(TAG)"; \
+	for name in $(SELECTED_IMAGES); do \
+		image="$(IMAGE_PREFIX)/$$name:$(TAG)"; \
 		echo "Pushing $$image"; \
 		docker push "$$image"; \
 	done

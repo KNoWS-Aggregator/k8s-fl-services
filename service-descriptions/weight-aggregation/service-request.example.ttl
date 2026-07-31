@@ -1,0 +1,10 @@
+@base <https://example.org/k8s-fl-services/weight-aggregation/> .
+@prefix aggr: <https://w3id.org/aggregator#> .
+
+<https://aggregator.example/requests/weight-aggregation-1>
+    a aggr:ServiceRequest ;
+    aggr:serviceDefinition <definition> .
+
+# Round count, quorum, timeout, and training configuration are supplied to the
+# /session/start operation and therefore are not deployment-time bindings.
+

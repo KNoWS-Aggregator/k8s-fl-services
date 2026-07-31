@@ -1,0 +1,77 @@
+@prefix aggr: <https://w3id.org/aggregator#> .
+@prefix fno: <https://w3id.org/function/ontology#> .
+@prefix hydra: <http://www.w3.org/ns/hydra/core#> .
+@prefix fnoc: <https://fno.io/vocabulary/composition/0.1.0/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+aggr:ServiceDefinition
+    a rdfs:Class ;
+    rdfs:label "Service definition" ;
+    rdfs:comment "Reusable blueprint of the functions and HTTP API implemented by a service." .
+
+aggr:Endpoint
+    a rdfs:Class ;
+    rdfs:label "Endpoint" ;
+    rdfs:comment "An HTTP endpoint whose path is relative to a deployed service root." .
+
+aggr:FunctionBinding
+    a rdfs:Class ;
+    rdfs:label "Function binding" ;
+    rdfs:comment "Initial deployment-time parameter bindings for one function." .
+
+aggr:serviceDefinition
+    a rdf:Property ;
+    rdfs:domain aggr:ServiceRequest ;
+    rdfs:range aggr:ServiceDefinition .
+
+aggr:functionBinding
+    a rdf:Property ;
+    rdfs:domain aggr:ServiceRequest ;
+    rdfs:range aggr:FunctionBinding .
+
+aggr:function
+    a rdf:Property ;
+    rdfs:domain aggr:FunctionBinding ;
+    rdfs:range fno:Function .
+
+aggr:instanceOf
+    a rdf:Property ;
+    rdfs:domain aggr:Service ;
+    rdfs:range aggr:ServiceDefinition .
+
+aggr:supportsEndpoint
+    a rdf:Property ;
+    rdfs:domain aggr:ServiceDefinition ;
+    rdfs:range aggr:Endpoint .
+
+aggr:composition
+    a rdf:Property ;
+    rdfs:domain aggr:ServiceDefinition ;
+    rdfs:range fnoc:Composition .
+
+aggr:path
+    a rdf:Property ;
+    rdfs:domain aggr:Endpoint ;
+    rdfs:range xsd:string .
+
+aggr:executes
+    a rdf:Property ;
+    rdfs:domain hydra:Operation ;
+    rdfs:range fno:Function .
+
+aggr:updatesParameter
+    a rdf:Property ;
+    rdfs:domain hydra:Operation ;
+    rdfs:range fno:Parameter .
+
+aggr:returnsOutput
+    a rdf:Property ;
+    rdfs:domain hydra:Operation ;
+    rdfs:range fno:Output .
+
+aggr:returnsParameter
+    a rdf:Property ;
+    rdfs:domain hydra:Operation ;
+    rdfs:range fno:Parameter .

@@ -1,0 +1,214 @@
+apiVersion: aggregator.example.org/v1alpha1
+kind: FnoDescription
+metadata:
+  name: federated-training-client-prepare
+spec:
+  type: function
+  description: |
+    @prefix fno: <https://w3id.org/function/ontology#> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    <prepare>
+        a fno:Function ;
+        fno:name "Prepare hospital data" ;
+        fno:expects (
+            <sources>
+            <dataset>
+            <authn>
+            <pollEnabled>
+            <pollInterval>
+        ) ;
+        fno:returns ( <preparedDataOutput> ) .
+
+    <sources>
+        a fno:Parameter ;
+        fno:predicate <sourcesValue> ;
+        fno:type xsd:anyURI ;
+        fno:required true .
+
+    <dataset>
+        a fno:Parameter ;
+        fno:predicate <datasetValue> ;
+        fno:type xsd:string ;
+        fno:required true .
+
+    <authn>
+        a fno:Parameter ;
+        fno:predicate <authnValue> ;
+        fno:type xsd:anyURI ;
+        fno:required true .
+
+    <pollEnabled>
+        a fno:Parameter ;
+        fno:predicate <pollEnabledValue> ;
+        fno:type xsd:boolean ;
+        fno:required false .
+
+    <pollInterval>
+        a fno:Parameter ;
+        fno:predicate <pollIntervalValue> ;
+        fno:type xsd:string ;
+        fno:required false .
+
+    <preparedDataOutput>
+        a fno:Output ;
+        fno:predicate <preparedDataValue> .
+---
+apiVersion: aggregator.example.org/v1alpha1
+kind: FnoDescription
+metadata:
+  name: federated-training-client-train
+spec:
+  type: function
+  description: |
+    @prefix fno: <https://w3id.org/function/ontology#> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    <train>
+        a fno:Function ;
+        fno:name "Train local model" ;
+        fno:expects (
+            <preparedDataInput>
+            <sessionId>
+            <clientId>
+            <expectedRounds>
+            <trainingConfig>
+            <roundId>
+            <replyUrl>
+            <globalWeights>
+        ) ;
+        fno:returns (
+            <clientWeights>
+            <trainingMetrics>
+            <evaluationDataOutput>
+        ) .
+
+    <preparedDataInput>
+        a fno:Parameter ;
+        fno:predicate <preparedDataValue> ;
+        fno:type xsd:anyURI ;
+        fno:required true .
+
+    <sessionId>
+        a fno:Parameter ;
+        fno:predicate <sessionIdValue> ;
+        fno:type xsd:string ;
+        fno:required true .
+
+    <clientId>
+        a fno:Parameter ;
+        fno:predicate <clientIdValue> ;
+        fno:type xsd:string ;
+        fno:required true .
+
+    <expectedRounds>
+        a fno:Parameter ;
+        fno:predicate <expectedRoundsValue> ;
+        fno:type xsd:positiveInteger ;
+        fno:required true .
+
+    <trainingConfig>
+        a fno:Parameter ;
+        fno:predicate <trainingConfigValue> ;
+        fno:type xsd:string ;
+        fno:required false .
+
+    <roundId>
+        a fno:Parameter ;
+        fno:predicate <roundIdValue> ;
+        fno:type xsd:nonNegativeInteger ;
+        fno:required true .
+
+    <replyUrl>
+        a fno:Parameter ;
+        fno:predicate <replyUrlValue> ;
+        fno:type xsd:anyURI ;
+        fno:required true .
+
+    <globalWeights>
+        a fno:Parameter ;
+        fno:predicate <globalWeightsValue> ;
+        fno:type xsd:base64Binary ;
+        fno:required true .
+
+    <clientWeights>
+        a fno:Output ;
+        fno:predicate <clientWeightsValue> .
+
+    <trainingMetrics>
+        a fno:Output ;
+        fno:predicate <trainingMetricsValue> .
+
+    <evaluationDataOutput>
+        a fno:Output ;
+        fno:predicate <evaluationDataValue> .
+---
+apiVersion: aggregator.example.org/v1alpha1
+kind: FnoDescription
+metadata:
+  name: federated-training-client-evaluate
+spec:
+  type: function
+  description: |
+    @prefix fno: <https://w3id.org/function/ontology#> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    <evaluate>
+        a fno:Function ;
+        fno:name "Evaluate aggregated model" ;
+        fno:expects (
+            <evaluationDataInput>
+            <sessionId>
+            <clientId>
+            <trainingConfig>
+            <roundId>
+            <replyUrl>
+            <globalWeights>
+        ) ;
+        fno:returns ( <evaluationMetrics> ) .
+
+    <evaluationDataInput>
+        a fno:Parameter ;
+        fno:predicate <evaluationDataValue> ;
+        fno:type xsd:anyURI ;
+        fno:required true .
+
+    <sessionId>
+        a fno:Parameter ;
+        fno:predicate <sessionIdValue> ;
+        fno:type xsd:string ;
+        fno:required true .
+
+    <clientId>
+        a fno:Parameter ;
+        fno:predicate <clientIdValue> ;
+        fno:type xsd:string ;
+        fno:required true .
+
+    <trainingConfig>
+        a fno:Parameter ;
+        fno:predicate <trainingConfigValue> ;
+        fno:type xsd:string ;
+        fno:required false .
+
+    <roundId>
+        a fno:Parameter ;
+        fno:predicate <roundIdValue> ;
+        fno:type xsd:nonNegativeInteger ;
+        fno:required true .
+
+    <replyUrl>
+        a fno:Parameter ;
+        fno:predicate <replyUrlValue> ;
+        fno:type xsd:anyURI ;
+        fno:required true .
+
+    <globalWeights>
+        a fno:Parameter ;
+        fno:predicate <globalWeightsValue> ;
+        fno:type xsd:base64Binary ;
+        fno:required true .
+
+    <evaluationMetrics>
+        a fno:Output ;
+        fno:predicate <evaluationMetricsValue> .

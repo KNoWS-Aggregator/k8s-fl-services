@@ -1,0 +1,123 @@
+@base <https://example.org/k8s-fl-services/weight-aggregation/> .
+@prefix fno: <https://w3id.org/function/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<startSession>
+    a fno:Function ;
+    fno:name "Start federated training session" ;
+    fno:expects (
+        <expectedRounds>
+        <minimumClients>
+        <roundTimeout>
+        <trainingConfig>
+    ) ;
+    fno:returns ( <startedSessionId> ) .
+
+<aggregateWeights>
+    a fno:Function ;
+    fno:name "Aggregate client weights" ;
+    fno:expects (
+        <currentAggregatedWeights>
+        <sessionId>
+        <roundId>
+        <clientId>
+        <clientWeights>
+        <trainingMetrics>
+    ) ;
+    fno:returns ( <globalWeights> ) .
+
+<aggregateEvaluationMetrics>
+    a fno:Function ;
+    fno:name "Aggregate client evaluation metrics" ;
+    fno:expects (
+        <currentAggregatedEvaluationMetrics>
+        <sessionId>
+        <roundId>
+        <clientId>
+        <clientEvaluationMetrics>
+    ) ;
+    fno:returns ( <aggregatedEvaluationMetrics> ) .
+
+<expectedRounds>
+    a fno:Parameter ;
+    fno:predicate <expectedRoundsValue> ;
+    fno:type xsd:positiveInteger ;
+    fno:required true .
+
+<minimumClients>
+    a fno:Parameter ;
+    fno:predicate <minimumClientsValue> ;
+    fno:type xsd:positiveInteger ;
+    fno:required false .
+
+<roundTimeout>
+    a fno:Parameter ;
+    fno:predicate <roundTimeoutValue> ;
+    fno:type xsd:positiveInteger ;
+    fno:required false .
+
+<trainingConfig>
+    a fno:Parameter ;
+    fno:predicate <trainingConfigValue> ;
+    fno:type xsd:string ;
+    fno:required false .
+
+<sessionId>
+    a fno:Parameter ;
+    fno:predicate <sessionIdValue> ;
+    fno:type xsd:string ;
+    fno:required true .
+
+<startedSessionId>
+    a fno:Output ;
+    fno:predicate <sessionIdValue> .
+
+<roundId>
+    a fno:Parameter ;
+    fno:predicate <roundIdValue> ;
+    fno:type xsd:nonNegativeInteger ;
+    fno:required true .
+
+<clientId>
+    a fno:Parameter ;
+    fno:predicate <clientIdValue> ;
+    fno:type xsd:string ;
+    fno:required true .
+
+<clientWeights>
+    a fno:Parameter ;
+    fno:predicate <clientWeightsValue> ;
+    fno:type xsd:base64Binary ;
+    fno:required true .
+
+<trainingMetrics>
+    a fno:Parameter ;
+    fno:predicate <trainingMetricsValue> ;
+    fno:type xsd:string ;
+    fno:required true .
+
+<clientEvaluationMetrics>
+    a fno:Parameter ;
+    fno:predicate <clientEvaluationMetricsValue> ;
+    fno:type xsd:string ;
+    fno:required true .
+
+<globalWeights>
+    a fno:Output ;
+    fno:predicate <globalWeightsValue> .
+
+<currentAggregatedWeights>
+    a fno:Parameter ;
+    fno:predicate <currentAggregatedWeightsValue> ;
+    fno:type xsd:base64Binary ;
+    fno:required false .
+
+<currentAggregatedEvaluationMetrics>
+    a fno:Parameter ;
+    fno:predicate <currentAggregatedEvaluationMetricsValue> ;
+    fno:type xsd:string ;
+    fno:required false .
+
+<aggregatedEvaluationMetrics>
+    a fno:Output ;
+    fno:predicate <aggregatedEvaluationMetricsValue> .

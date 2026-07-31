@@ -1,138 +1,138 @@
 # Kubernetes Federated Learning Services
 
-This repository is a container-image monorepo. Each directory under
-`services/` represents one service image. Images are published to the
-KNoWS-Aggregator organization in GitHub Container Registry and linked back to
-this source repository through OCI image metadata.
+This repository separates deployable container images from logical aggregator
+services.
 
-Currently publishable:
+## Logical services
 
-| Service | Image |
+The platform exposes two services:
+
+| Service | Container images |
 | --- | --- |
-| `data-preparation` | `ghcr.io/knows-aggregator/data-preparation` |
+| `federated-training-client` | `data-preparation`, `model-training` |
+| `weight-aggregation` | `weight-aggregation` |
 
-The model-training and weight-aggregation directories are not included in the
-build list until their Dockerfiles are ready.
+Each hospital receives one federated-training-client service. Its two
+containers run in the same Pod and mount the same persistent volume at
+`/app/data`. One central weight-aggregation service coordinates all deployed
+training clients and uses its own volume.
+
+Semantic FnO, endpoint, composition, dataset, and distribution descriptions
+are under [`service-descriptions/`](service-descriptions/README.md). Container
+implementation details are under `images/`.
 
 ## Repository structure
 
 ```text
 .
-├── Makefile
+├── deployments/
+│   └── federated-training-client/
+│       ├── deployment.example.yaml
+│       └── pvc.yaml
+├── images/
+│   ├── data-preparation/
+│   ├── model-training/
+│   └── weight-aggregation/
 ├── libs/
-└── services/
-    ├── data-preparation/
-    │   ├── Dockerfile
-    │   ├── aggregator-platform.yaml
-    │   ├── pvc.yaml
-    │   └── src/
-    ├── model-training/
-    └── weight-aggregation/
+│   ├── common/
+│   └── fl-model/
+├── service-descriptions/
+│   ├── federated-training-client/
+│   ├── weight-aggregation/
+│   ├── README.md
+│   └── service-definition-vocabulary.ttl
+└── Makefile
 ```
 
-All images use the repository root as their Docker build context. This permits
-future services to copy shared packages from `libs/`. The `.dockerignore` file
-keeps Git metadata, virtual environments, tests, and local data out of that
-context.
+The repository root is the Docker build context so images can copy shared
+packages from `libs/`.
 
-## Prerequisites
+## Container images
 
-- Docker with access to the Docker daemon.
+Images are published to the KNoWS-Aggregator organization:
+
+| Image package | Registry image |
+| --- | --- |
+| `data-preparation` | `ghcr.io/knows-aggregator/data-preparation` |
+| `model-training` | `ghcr.io/knows-aggregator/model-training` |
+| `weight-aggregation` | `ghcr.io/knows-aggregator/weight-aggregation` |
+
+The separate data-preparation and model-training images do not imply separate
+aggregator services. They are implementation components of the single
+federated-training-client service.
+
+## Registry login
+
+Prerequisites:
+
+- Docker with access to its daemon.
 - A GitHub personal access token (classic) with `write:packages`.
-- SSO authorization for the token when required by the organization.
+- SSO authorization when required by the organization.
 - Permission to publish packages in `KNoWS-Aggregator`.
 
-Do not add a PAT to the Makefile, a `.env` file, or Git. Load it into the
-current shell without placing it directly in shell history:
+Load the token without putting it directly in shell history:
 
 ```sh
 read -s CR_PAT
 export CR_PAT
 export GHCR_USER="your-github-username"
-```
-
-Authenticate to GHCR:
-
-```sh
 make containers-login
 ```
 
-The login target passes the token to Docker through standard input.
+Do not commit the token to Git or store it in the Makefile.
 
 ## Build images
 
-List the images currently enabled for publication:
+List all enabled images:
 
 ```sh
 make containers-list
 ```
 
-Build all enabled services:
+Build every image:
 
 ```sh
 make containers-build
 ```
 
-Build only data-preparation:
+Build one versioned image:
 
 ```sh
-make containers-build CONTAINER=data-preparation
+make containers-build CONTAINER=model-training TAG=0.1.0
 ```
 
-Build a versioned image:
-
-```sh
-make containers-build CONTAINER=data-preparation TAG=0.1.0
-```
-
-This produces:
-
-```text
-ghcr.io/knows-aggregator/data-preparation:0.1.0
-```
+All image names are listed explicitly in `IMAGES` in the root Makefile.
 
 ## Push images
 
-The push target builds before pushing, ensuring the requested local tag exists
-and reflects the current source:
+Push one versioned image:
 
 ```sh
-make containers-push CONTAINER=data-preparation TAG=0.1.0
+make containers-push CONTAINER=model-training TAG=0.1.0
 ```
 
-Push every enabled service using `latest`:
+Push every enabled image with the default `latest` tag:
 
 ```sh
 make containers-push
 ```
 
-For releases, prefer an immutable version tag and optionally publish `latest`
-afterward:
+The push target builds before pushing. Every Dockerfile includes the OCI source
+label linking its GitHub package to this repository.
 
-```sh
-make containers-push CONTAINER=data-preparation TAG=0.1.0
-make containers-push CONTAINER=data-preparation TAG=latest
-```
+## Example deployment
 
-The data-preparation Dockerfile includes
-`org.opencontainers.image.source=https://github.com/KNoWS-Aggregator/k8s-fl-services`,
-which allows GitHub to associate the package with this repository.
+[`deployment.example.yaml`](deployments/federated-training-client/deployment.example.yaml)
+shows data preparation and model training as two containers in one Deployment.
+[`pvc.yaml`](deployments/federated-training-client/pvc.yaml) provides their
+shared volume.
 
-## Adding another service
+The example demonstrates container placement and storage only. The aggregator
+platform remains responsible for substituting function inputs, publishing the
+service endpoints, and creating the final workload.
 
-Complete and test `services/<service>/Dockerfile`, then add its directory name
-to the explicit list in the root Makefile:
+## Adding an image
 
-```make
-SERVICES := data-preparation model-training
-```
-
-After that, the existing list, build, and push targets automatically include
-the new image. Keeping this list explicit prevents unfinished service
-directories from breaking build-all and push-all operations.
-
-## Data preparation
-
-Service-specific API, polling, persistent-volume, and aggregator-platform
-documentation is available in
-[`services/data-preparation/README.md`](services/data-preparation/README.md).
+Add an image package under `images/<name>/`, then add its name to `IMAGES` in
+the Makefile. Adding an image does not automatically create a logical service;
+add or update a definition under `service-descriptions/` separately.
