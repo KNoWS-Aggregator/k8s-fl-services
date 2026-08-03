@@ -135,4 +135,5 @@ service endpoints, and creating the final workload.
 
 Add an image package under `images/<name>/`, then add its name to `IMAGES` in
 the Makefile. Adding an image does not automatically create a logical service;
-add or update a definition under `service-descriptions/` separately.
+add or update a service profile and deployment function under
+`service-descriptions/` separately.

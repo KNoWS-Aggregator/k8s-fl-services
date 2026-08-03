@@ -3,8 +3,8 @@
 
 <https://aggregator.example/services/weight-aggregation-1>
     a aggr:Service, dcat:DataService ;
-    aggr:instanceOf
-        <https://example.org/k8s-fl-services/weight-aggregation/definition> ;
+    aggr:deploymentFunction
+        <https://example.org/k8s-fl-services/weight-aggregation/deploy> ;
     dcat:endpointURL
         <https://aggregator.example/services/weight-aggregation-1/> ;
     dcat:servesDataset

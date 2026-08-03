@@ -3,19 +3,13 @@
 
 <https://aggregator.example/requests/federated-training-client-1>
     a aggr:ServiceRequest ;
-    aggr:serviceDefinition <definition> ;
-    aggr:functionBinding [
-        a aggr:FunctionBinding ;
-        aggr:function <prepare> ;
-        <sourcesValue>
-            <https://hospital.example/slices/case-example> ;
-        <datasetValue> "accellero" ;
-        <authnValue> <https://auth.example/realms/hospital> ;
-        <pollEnabledValue> true ;
-        <pollIntervalValue> "@hourly"
-    ] .
+    aggr:deploymentFunction <deploy> ;
+    <sourcesValue> <https://hospital.example/slices/case-example> ;
+    <datasetValue> "accellero" ;
+    <authnValue> <https://auth.example/realms/hospital> ;
+    <pollEnabledValue> true ;
+    <pollIntervalValue> "@hourly" .
 
 # Prepared data and evaluation data are connected internally by the
-# ServiceDefinition composition. Session and round values are supplied by
+# ServiceProfile composition. Session and round values are supplied by
 # runtime operations.
-

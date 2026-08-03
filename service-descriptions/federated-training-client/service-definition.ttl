@@ -3,8 +3,8 @@
 @prefix fnoc: <https://fno.io/vocabulary/composition/0.1.0/> .
 @prefix hydra: <http://www.w3.org/ns/hydra/core#> .
 
-<definition>
-    a aggr:ServiceDefinition ;
+<profile>
+    a aggr:ServiceProfile ;
     aggr:performs <prepare>, <train>, <evaluate> ;
     aggr:composition <client-data-flow> ;
     aggr:supportsEndpoint
@@ -133,4 +133,3 @@
     hydra:method "POST" ;
     aggr:updatesParameter
         <sessionId>, <clientId>, <expectedRounds>, <trainingConfig> .
-

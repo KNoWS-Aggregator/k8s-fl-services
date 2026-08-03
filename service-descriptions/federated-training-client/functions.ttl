@@ -1,6 +1,56 @@
 @base <https://example.org/k8s-fl-services/federated-training-client/> .
 @prefix fno: <https://w3id.org/function/ontology#> .
+@prefix aggr: <https://w3id.org/aggregator#> .
+@prefix dct: <http://purl.org/dc/terms/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<deploy>
+    a fno:Function ;
+    fno:name "Deploy federated training client" ;
+    fno:expects (
+        <deploymentSources>
+        <deploymentDataset>
+        <deploymentAuthn>
+        <deploymentPollEnabled>
+        <deploymentPollInterval>
+    ) ;
+    fno:returns ( <deployedService> ) .
+
+<deploymentSources>
+    a fno:Parameter ;
+    fno:predicate <sourcesValue> ;
+    fno:type xsd:anyURI ;
+    fno:required true .
+
+<deploymentDataset>
+    a fno:Parameter ;
+    fno:predicate <datasetValue> ;
+    fno:type xsd:string ;
+    fno:required true .
+
+<deploymentAuthn>
+    a fno:Parameter ;
+    fno:predicate <authnValue> ;
+    fno:type xsd:anyURI ;
+    fno:required true .
+
+<deploymentPollEnabled>
+    a fno:Parameter ;
+    fno:predicate <pollEnabledValue> ;
+    fno:type xsd:boolean ;
+    fno:required false .
+
+<deploymentPollInterval>
+    a fno:Parameter ;
+    fno:predicate <pollIntervalValue> ;
+    fno:type xsd:string ;
+    fno:required false .
+
+<deployedService>
+    a fno:Output ;
+    fno:predicate <serviceValue> ;
+    fno:type aggr:Service ;
+    dct:conformsTo <profile> .
 
 <prepare>
     a fno:Function ;
@@ -150,4 +200,3 @@
 <evaluationMetrics>
     a fno:Output ;
     fno:predicate <evaluationMetricsValue> .
-

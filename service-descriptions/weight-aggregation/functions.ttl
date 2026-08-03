@@ -1,6 +1,20 @@
 @base <https://example.org/k8s-fl-services/weight-aggregation/> .
 @prefix fno: <https://w3id.org/function/ontology#> .
+@prefix aggr: <https://w3id.org/aggregator#> .
+@prefix dct: <http://purl.org/dc/terms/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<deploy>
+    a fno:Function ;
+    fno:name "Deploy weight aggregation service" ;
+    fno:expects () ;
+    fno:returns ( <deployedService> ) .
+
+<deployedService>
+    a fno:Output ;
+    fno:predicate <serviceValue> ;
+    fno:type aggr:Service ;
+    dct:conformsTo <profile> .
 
 <startSession>
     a fno:Function ;

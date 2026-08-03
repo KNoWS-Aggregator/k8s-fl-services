@@ -14,7 +14,7 @@ Data preparation continuously converts the hospital case slice into aggregated
 Parquet data. Model training consumes that prepared generation, trains local
 weights, and evaluates aggregated weights.
 
-The service definition performs three functions:
+The service profile performs three runtime functions:
 
 ```text
 prepare -> train -> evaluate
@@ -31,4 +31,3 @@ The two container APIs currently listen on separate Pod ports. The platform
 must publish the relative paths in `service-definition.ttl` under one service
 root, routing preparation operations to the data-preparation container and
 training/session/evaluation operations to the model-training container.
-

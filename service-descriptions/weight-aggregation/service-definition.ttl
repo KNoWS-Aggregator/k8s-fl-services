@@ -2,8 +2,8 @@
 @prefix aggr: <https://w3id.org/aggregator#> .
 @prefix hydra: <http://www.w3.org/ns/hydra/core#> .
 
-<definition>
-    a aggr:ServiceDefinition ;
+<profile>
+    a aggr:ServiceProfile ;
     aggr:performs
         <startSession>,
         <aggregateWeights>,

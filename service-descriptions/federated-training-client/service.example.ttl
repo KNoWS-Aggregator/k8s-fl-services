@@ -3,8 +3,8 @@
 
 <https://aggregator.example/services/federated-training-client-1>
     a aggr:Service, dcat:DataService ;
-    aggr:instanceOf
-        <https://example.org/k8s-fl-services/federated-training-client/definition> ;
+    aggr:deploymentFunction
+        <https://example.org/k8s-fl-services/federated-training-client/deploy> ;
     dcat:endpointURL
         <https://aggregator.example/services/federated-training-client-1/> ;
     dcat:servesDataset
@@ -73,4 +73,3 @@
         <https://www.iana.org/assignments/media-types/application/json> ;
     dcat:accessURL
         <https://aggregator.example/services/federated-training-client-1/evaluation-metrics> .
-

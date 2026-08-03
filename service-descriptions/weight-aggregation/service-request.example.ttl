@@ -3,8 +3,7 @@
 
 <https://aggregator.example/requests/weight-aggregation-1>
     a aggr:ServiceRequest ;
-    aggr:serviceDefinition <definition> .
+    aggr:deploymentFunction <deploy> .
 
 # Round count, quorum, timeout, and training configuration are supplied to the
 # /session/start operation and therefore are not deployment-time bindings.
-

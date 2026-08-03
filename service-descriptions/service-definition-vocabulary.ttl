@@ -6,49 +6,30 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-aggr:ServiceDefinition
+aggr:ServiceProfile
     a rdfs:Class ;
-    rdfs:label "Service definition" ;
-    rdfs:comment "Reusable blueprint of the functions and HTTP API implemented by a service." .
+    rdfs:label "Service profile" ;
+    rdfs:comment "Reusable profile of the runtime functions and HTTP API implemented by a service." .
 
 aggr:Endpoint
     a rdfs:Class ;
     rdfs:label "Endpoint" ;
     rdfs:comment "An HTTP endpoint whose path is relative to a deployed service root." .
 
-aggr:FunctionBinding
-    a rdfs:Class ;
-    rdfs:label "Function binding" ;
-    rdfs:comment "Initial deployment-time parameter bindings for one function." .
-
-aggr:serviceDefinition
+aggr:deploymentFunction
     a rdf:Property ;
-    rdfs:domain aggr:ServiceRequest ;
-    rdfs:range aggr:ServiceDefinition .
-
-aggr:functionBinding
-    a rdf:Property ;
-    rdfs:domain aggr:ServiceRequest ;
-    rdfs:range aggr:FunctionBinding .
-
-aggr:function
-    a rdf:Property ;
-    rdfs:domain aggr:FunctionBinding ;
+    rdfs:label "deployment function" ;
+    rdfs:comment "The FnO function used by a service request, and recorded on the service produced by that deployment." ;
     rdfs:range fno:Function .
-
-aggr:instanceOf
-    a rdf:Property ;
-    rdfs:domain aggr:Service ;
-    rdfs:range aggr:ServiceDefinition .
 
 aggr:supportsEndpoint
     a rdf:Property ;
-    rdfs:domain aggr:ServiceDefinition ;
+    rdfs:domain aggr:ServiceProfile ;
     rdfs:range aggr:Endpoint .
 
 aggr:composition
     a rdf:Property ;
-    rdfs:domain aggr:ServiceDefinition ;
+    rdfs:domain aggr:ServiceProfile ;
     rdfs:range fnoc:Composition .
 
 aggr:path
