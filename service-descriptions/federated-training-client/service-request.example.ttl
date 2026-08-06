@@ -4,9 +4,8 @@
 <https://aggregator.example/requests/federated-training-client-1>
     a aggr:ServiceRequest ;
     aggr:deploymentFunction <deploy> ;
-    <sourcesValue> <https://hospital.example/slices/case-example> ;
-    <datasetValue> "accellero" ;
-    <authnValue> <https://auth.example/realms/hospital> ;
+    <caseSliceValue> <https://hospital.example/slices/case-example> ;
+    <datasetIdValue> "accellero" ;
     <pollEnabledValue> true ;
     <pollIntervalValue> "@hourly" .
 

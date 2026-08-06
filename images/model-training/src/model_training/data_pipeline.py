@@ -81,11 +81,23 @@ def _dataset_generation(accel_path: Path, gt_path: Path) -> str:
     state_path = _dataset_state_path()
     if state_path.is_file():
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        if state.get("status") != "ready" or not state.get("generation"):
-            raise RuntimeError(
-                f"Prepared dataset is not ready: {state.get('status', 'unknown')}"
-            )
-        return str(state["generation"])
+        if state.get("status") == "ready" and state.get("generation"):
+            return str(state["generation"])
+        manifest_path = state_path.with_name("manifest.json")
+        if manifest_path.is_file() and accel_path.is_file() and gt_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("generation"):
+                available = [
+                    (str(path), path.stat().st_size, path.stat().st_mtime_ns)
+                    for path in (accel_path, gt_path)
+                ]
+                fingerprint = hashlib.sha256(
+                    json.dumps(available, separators=(",", ":")).encode()
+                ).hexdigest()
+                return f"{manifest['generation']}-{fingerprint}"
+        raise RuntimeError(
+            f"Prepared dataset is not ready: {state.get('status', 'unknown')}"
+        )
     # Compatibility for volumes produced before the generation handshake.
     legacy = [
         (str(path), path.stat().st_size, path.stat().st_mtime_ns)

@@ -86,6 +86,39 @@ def _write_status(payload: dict[str, Any]) -> None:
         temporary.replace(path)
 
 
+def _prepared_data_status() -> dict[str, Any]:
+    data_dir = _data_dir()
+    paths = (
+        data_dir / "downloads" / "accel.parquet",
+        data_dir / "downloads" / "gt.parquet",
+    )
+    files_available = all(path.is_file() for path in paths)
+    state_path = data_dir / "dataset-state.json"
+    manifest_path = data_dir / "manifest.json"
+    state = (
+        json.loads(state_path.read_text(encoding="utf-8"))
+        if state_path.is_file()
+        else {}
+    )
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.is_file()
+        else {}
+    )
+    state_status = state.get("status", "legacy" if files_available else "missing")
+    generation = (
+        state.get("generation")
+        if state_status == "ready"
+        else manifest.get("generation")
+    )
+    valid = files_available and bool(generation or not state_path.is_file())
+    return {
+        "valid": valid,
+        "status": state_status,
+        "generation": generation,
+    }
+
+
 def _read_session() -> ClientSessionStart | None:
     path = _session_path()
     if not path.is_file():
@@ -207,6 +240,12 @@ def _evaluation_session_for(msg: EvaluationInitMessage) -> ClientSessionStart:
 
 @app.post("/session/start")
 def session_start(request: ClientSessionStart) -> dict[str, Any]:
+    prepared_data = _prepared_data_status()
+    if not prepared_data["valid"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No valid prepared dataset is available",
+        )
     if _run_lock.locked():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -543,19 +582,8 @@ def health() -> dict[str, str]:
 def readiness() -> dict[str, str]:
     try:
         data_dir = _data_dir()
-        for path in (
-            data_dir / "downloads" / "accel.parquet",
-            data_dir / "downloads" / "gt.parquet",
-        ):
-            if not path.is_file():
-                raise FileNotFoundError(f"Required prepared data is missing: {path}")
-        state_path = data_dir / "dataset-state.json"
-        if state_path.is_file():
-            dataset_state = json.loads(state_path.read_text(encoding="utf-8"))
-            if dataset_state.get("status") != "ready":
-                raise RuntimeError(
-                    f"Prepared dataset is not ready: {dataset_state.get('status', 'unknown')}"
-                )
+        if not _prepared_data_status()["valid"]:
+            raise RuntimeError("No valid prepared dataset is available")
         work_dir = data_dir / "model-training"
         work_dir.mkdir(parents=True, exist_ok=True)
         probe = work_dir / ".write-probe"
@@ -571,7 +599,20 @@ def readiness() -> dict[str, str]:
 
 @app.get("/status")
 def training_status() -> dict[str, Any]:
-    return _read_status()
+    result = _read_status()
+    session = _read_session()
+    prepared_data = _prepared_data_status()
+    result.update(
+        {
+            "prepared_data": prepared_data,
+            "session": {
+                "active": session is not None,
+                "session_id": session.session_id if session else None,
+            },
+            "trainable": prepared_data["valid"] and session is None,
+        }
+    )
+    return result
 
 
 @app.get("/weights", response_class=FileResponse)

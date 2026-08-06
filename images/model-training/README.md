@@ -110,7 +110,11 @@ make containers-push CONTAINER=model-training TAG=0.1.0
 - `GET /evaluation-metrics` retrieves client evaluation metrics.
 - `GET /healthz` provides a process liveness check.
 - `GET /readyz` verifies prepared Parquet inputs and shared-volume write access.
-- `GET /status` returns the persistent state of the most recent round.
+- `GET /status` returns the persistent state of the most recent round together
+  with `prepared_data.valid`, the current session assignment, and `trainable`.
+  An updating preparation remains valid when a previously published generation
+  and both prepared Parquet files still exist. The first preparation is not
+  trainable until its initial generation has been published.
 
 Only one round runs at a time. A different concurrent round receives `409`.
 Repeating the currently running round is idempotent. Successful result messages

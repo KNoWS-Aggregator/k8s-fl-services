@@ -28,12 +28,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _public_result(result: dict[str, Any]) -> dict[str, Any]:
+    public = dict(result)
+    changes = result.get("changes")
+    if isinstance(changes, dict):
+        public["changes"] = {
+            name: len(participants) if isinstance(participants, list) else participants
+            for name, participants in changes.items()
+        }
+    return public
+
+
 def _prepare() -> None:
     global _state
     try:
         settings = Settings.from_env()
         result = Converter(settings).run()
-        _state = {**_state, "status": "succeeded", "finished_at": _now(), "result": result}
+        _state = {
+            **_state,
+            "status": "succeeded",
+            "finished_at": _now(),
+            "result": _public_result(result),
+        }
     except Exception as exc:
         logger.exception("Data preparation failed")
         _state = {**_state, "status": "failed", "finished_at": _now(), "error": str(exc)}
@@ -132,13 +148,6 @@ def download_results() -> FileResponse:
         media_type="application/zip",
         filename=settings.result_archive_name,
     )
-
-
-@app.post("/prepare", status_code=status.HTTP_202_ACCEPTED)
-def prepare() -> dict[str, Any]:
-    if not _start_preparation():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Preparation is already running")
-    return dict(_state)
 
 
 if __name__ == "__main__":

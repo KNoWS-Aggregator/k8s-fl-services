@@ -2,10 +2,10 @@
 
 This continuously running process starts the Kvasir RDF-to-Parquet pipeline
 when the HTTP server starts. Mount a persistent volume at `/app/data` and poll
-`GET /status` for completion. `POST /prepare` starts a new conversion later;
-it returns `409` while one is already running. `GET /healthz` is a liveness
-endpoint and `GET /readyz` validates configuration and persistent-volume write
-access. `GET /results` downloads a ZIP containing only the aggregated files
+`GET /status` for completion. Scheduled polling keeps the prepared data aligned
+with the hospital case slice. `GET /healthz` is a liveness endpoint,
+`GET /readyz` validates configuration and persistent-volume write access, and
+`GET /results` downloads a ZIP containing only the aggregated files
 `accel.parquet` and `gt.parquet`; raw intermediate data is not exposed.
 
 The service persists a participant/distribution manifest and polls the case
@@ -19,7 +19,6 @@ Required environment variables:
 - `SOURCES`: full case-slice URL without `/query`, for example
   `https://kvasir.example/hospital1/slices/case-pacsoi-fl`
 - `DATASET`: participant dataset slice ID, for example `accellero`
-- `AUTHN`: Keycloak realm URL
 
 Optional environment variables:
 
@@ -33,10 +32,8 @@ Optional environment variables:
 - `RETRY_BACKOFF_BASE` (`2.0`)
 - `REQUEST_TIMEOUT_SECONDS` (`60`)
 - `DOWNLOAD_TIMEOUT_SECONDS` (`3600`)
-- `AUTH_CLIENT_ID_TEMPLATE` (`{participant_id}_client`)
-- `AUTH_CLIENT_SECRET_TEMPLATE` (`{participant_id}`)
 - `RESULT_ARCHIVE_NAME` (`prepared-data.zip`)
-- `POL_ENABLED` (`true`): enables or disables scheduled polling
+- `POLL_ENABLED` (`true`): enables or disables scheduled polling
 - `POLL_INTERVAL` (`@hourly`): a five-field cron expression or cron alias such
   as `@hourly`, `@daily`, or `@weekly`
 

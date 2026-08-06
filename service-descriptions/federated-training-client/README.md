@@ -20,6 +20,12 @@ The service profile performs three runtime functions:
 prepare -> train -> evaluate
 ```
 
+Deployment receives the hospital case-slice URL, participant dataset-slice ID,
+and optional polling configuration. These infrastructure
+values are bound to the data-preparation container environment. The runtime
+`prepare` function remains independent of that deployment mechanism: its only
+input is `participantDatasets`, an RDF list of participant dataset-slice URIs.
+
 `aggr:composition` describes the internal prepared-data and evaluation-data
 connections without exposing the persistent-volume paths.
 

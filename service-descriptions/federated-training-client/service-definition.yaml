@@ -47,13 +47,6 @@ spec:
       aggregated model weights.
 
   endpoints:
-    prepare:
-      path: /prepare
-      targetPort: preparation
-      operations:
-        - method: POST
-          executes: prepare
-
     prepared-data:
       path: /results
       targetPort: preparation
@@ -206,19 +199,16 @@ spec:
     primaryResource: workload
 
     inputBindings:
-      - function: prepare
-        parameter: sources
+      - function: deploy
+        parameter: caseSlice
         variable: SOURCES
-      - function: prepare
-        parameter: dataset
+      - function: deploy
+        parameter: datasetId
         variable: DATASET
-      - function: prepare
-        parameter: authn
-        variable: AUTHN
-      - function: prepare
+      - function: deploy
         parameter: pollEnabled
         variable: POLL_ENABLED
-      - function: prepare
+      - function: deploy
         parameter: pollInterval
         variable: POLL_INTERVAL
 
@@ -268,8 +258,6 @@ spec:
                         value: "$(SOURCES)"
                       - name: DATASET
                         value: "$(DATASET)"
-                      - name: AUTHN
-                        value: "$(AUTHN)"
                       - name: POLL_ENABLED
                         value: "$(POLL_ENABLED)"
                       - name: POLL_INTERVAL

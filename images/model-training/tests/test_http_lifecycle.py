@@ -228,8 +228,42 @@ def test_readiness_checks_shared_inputs(monkeypatch, tmp_path):
     assert main.readiness() == {"status": "ready"}
 
 
+def test_updating_dataset_is_trainable_when_previous_generation_exists(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    (downloads / "accel.parquet").touch()
+    (downloads / "gt.parquet").touch()
+    (tmp_path / "dataset-state.json").write_text(
+        json.dumps({"status": "updating", "generation": "next"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"generation": "previous", "participants": {}}),
+        encoding="utf-8",
+    )
+
+    status_payload = main.training_status()
+
+    assert status_payload["prepared_data"] == {
+        "valid": True,
+        "status": "updating",
+        "generation": "previous",
+    }
+    assert status_payload["session"] == {"active": False, "session_id": None}
+    assert status_payload["trainable"] is True
+    assert main.readiness() == {"status": "ready"}
+
+
 def test_training_client_session_assignment(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        main,
+        "_prepared_data_status",
+        lambda: {"valid": True, "status": "ready", "generation": "test"},
+    )
     monkeypatch.setattr(main, "create_initial_weights", lambda: ([], "sha256:model"))
     request = ClientSessionStart(
         session_id="session-a",

@@ -12,8 +12,6 @@
 
 <https://aggregator.example/services/weight-aggregation-1#evaluation-metrics>
     a dcat:Dataset ;
-    aggr:forOutput
-        <https://example.org/k8s-fl-services/weight-aggregation/aggregatedEvaluationMetrics> ;
     dcat:distribution
         <https://aggregator.example/services/weight-aggregation-1#evaluation-metrics-distribution> .
 

@@ -50,7 +50,6 @@ def _boolean(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     sources: str
-    keycloak_realm_url: str
     dataset_id: str
     data_dir: Path
     download_chunk_size: int
@@ -60,8 +59,6 @@ class Settings:
     retry_backoff_base: float
     request_timeout_seconds: int
     download_timeout_seconds: int
-    auth_client_id_template: str
-    auth_client_secret_template: str
     result_archive_name: str
     poll_enabled: bool
     poll_interval: str
@@ -90,7 +87,6 @@ class Settings:
             )
         return cls(
             sources=sources,
-            keycloak_realm_url=_required("AUTHN").rstrip("/"),
             dataset_id=_required("DATASET"),
             data_dir=data_dir,
             download_chunk_size=_integer("DOWNLOAD_CHUNK_SIZE", 100 * 1024 * 1024),
@@ -100,10 +96,8 @@ class Settings:
             retry_backoff_base=_floating("RETRY_BACKOFF_BASE", 2.0),
             request_timeout_seconds=_integer("REQUEST_TIMEOUT_SECONDS", 60),
             download_timeout_seconds=_integer("DOWNLOAD_TIMEOUT_SECONDS", 3600),
-            auth_client_id_template=os.getenv("AUTH_CLIENT_ID_TEMPLATE", "{participant_id}_client"),
-            auth_client_secret_template=os.getenv("AUTH_CLIENT_SECRET_TEMPLATE", "{participant_id}"),
             result_archive_name=archive_name,
-            poll_enabled=_boolean("POL_ENABLED", True),
+            poll_enabled=_boolean("POLL_ENABLED", True),
             poll_interval=poll_interval,
         )
 
@@ -138,24 +132,3 @@ class Settings:
     @property
     def downloads_dir(self) -> Path:
         return self.data_dir / "downloads"
-
-    @property
-    def source_pod_id(self) -> str:
-        return unquote(urlparse(self.sources).path.rstrip("/").rsplit("/slices/", 1)[0].rsplit("/", 1)[-1])
-
-    @property
-    def kvasir_server(self) -> str:
-        parsed = urlparse(self.sources)
-        pod_path = parsed.path.rstrip("/").rsplit("/slices/", 1)[0]
-        base_path = pod_path.rsplit("/", 1)[0]
-        return f"{parsed.scheme}://{parsed.netloc}{base_path}".rstrip("/")
-
-    def auth_credentials(self, participant_id: str) -> tuple[str, str]:
-        values = {"participant_id": participant_id}
-        try:
-            return (
-                self.auth_client_id_template.format(**values),
-                self.auth_client_secret_template.format(**values),
-            )
-        except (KeyError, ValueError) as exc:
-            raise ValueError("Invalid AUTH_CLIENT_ID_TEMPLATE or AUTH_CLIENT_SECRET_TEMPLATE") from exc

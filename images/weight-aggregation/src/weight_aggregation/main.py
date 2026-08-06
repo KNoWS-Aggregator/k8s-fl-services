@@ -6,6 +6,8 @@ import logging
 import os
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +32,7 @@ from common.weight_io import bytes_to_weights, weights_to_bytes
 from fl_model import create_initial_weights, weight_signature
 
 from .aggregate import aggregate_evaluation_metrics, federated_average
-from .client_config import TRAINING_CLIENT_BASE_URLS
+from .client_registry import ClientRegistry, next_poll_delay
 from .dispatch import dispatch_evaluation, dispatch_round
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -71,9 +73,10 @@ class ActiveSession:
     timer: threading.Timer | None = None
 
 
-app = FastAPI(title="Federated weight aggregation", version="0.1.0")
 _coordinator_lock = threading.RLock()
 _active: ActiveSession | None = None
+_registry: ClientRegistry | None = None
+_stop_polling = threading.Event()
 
 
 def _now() -> str:
@@ -108,6 +111,115 @@ def _callback_url() -> str:
 def _evaluation_callback_url() -> str:
     base = os.getenv("PUBLIC_BASE_URL", "http://weight-aggregation:8080").rstrip("/")
     return f"{base}{EVALUATION_RESULT_PATH}"
+
+
+def _client_registry() -> ClientRegistry:
+    global _registry
+    if _registry is None:
+        case_slice = os.getenv("CASE_SLICE", "").strip()
+        if not case_slice:
+            raise ValueError("Required environment variable CASE_SLICE is not set")
+        _registry = ClientRegistry(case_slice)
+    return _registry
+
+
+def _refresh_clients() -> None:
+    changes = _client_registry().refresh()
+    if changes["added"] or changes["removed"]:
+        logger.info(
+            "Training service registry changed: %d added, %d removed",
+            len(changes["added"]),
+            len(changes["removed"]),
+        )
+
+
+def _is_trainable(base_url: str, own_session_id: str | None) -> bool:
+    try:
+        response = httpx.get(f"{base_url.rstrip('/')}/status", timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        prepared = (payload.get("prepared_data") or {}).get("valid") is True
+        session = payload.get("session") or {}
+        assigned_elsewhere = session.get("active") is True and (
+            not own_session_id or session.get("session_id") != own_session_id
+        )
+        return prepared and not assigned_elsewhere
+    except Exception:
+        logger.exception("Could not determine training readiness at %s", base_url)
+        return False
+
+
+def _client_counts() -> tuple[int, int, set[str]]:
+    urls = _client_registry().snapshot()
+    with _coordinator_lock:
+        own_session_id = _active.session_id if _active else None
+    if not urls:
+        return 0, 0, set()
+    with ThreadPoolExecutor(max_workers=min(16, len(urls))) as executor:
+        results = dict(
+            zip(
+                urls,
+                executor.map(
+                    lambda url: _is_trainable(url, own_session_id),
+                    urls,
+                ),
+            )
+        )
+    trainable = {url for url, ready in results.items() if ready}
+    return len(urls), len(trainable), trainable
+
+
+def _poll_forever() -> None:
+    schedule = os.getenv("POLL_INTERVAL", "@hourly").strip()
+    while not _stop_polling.wait(next_poll_delay(schedule)):
+        try:
+            _refresh_clients()
+        except Exception:
+            logger.exception("Could not refresh training services from the case slice")
+
+
+def _poll_enabled() -> bool:
+    value = os.getenv("POLL_ENABLED", "true").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("POLL_ENABLED must be true or false")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    poll_thread = None
+    try:
+        _refresh_clients()
+    except Exception:
+        logger.exception("Initial training service discovery failed")
+    try:
+        if _poll_enabled():
+            # Validate the expression before starting the background thread.
+            next_poll_delay(os.getenv("POLL_INTERVAL", "@hourly").strip())
+            _stop_polling.clear()
+            poll_thread = threading.Thread(
+                target=_poll_forever,
+                name="training-service-poller",
+                daemon=True,
+            )
+            poll_thread.start()
+    except Exception:
+        logger.exception("Polling configuration is invalid")
+    try:
+        yield
+    finally:
+        _stop_polling.set()
+        if poll_thread:
+            poll_thread.join(timeout=5)
+
+
+app = FastAPI(
+    title="Federated weight aggregation",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -188,11 +300,71 @@ def _release_clients(session: ActiveSession) -> None:
             logger.exception("Could not release client %s at %s", client_id, base_url)
 
 
-def _bootstrap_session(session_id: str, request: SessionStartRequest) -> None:
+def _accept_client(
+    session: ActiveSession,
+    client_id: str,
+    base_url: str,
+) -> bool:
+    try:
+        response = _client_post(
+            base_url,
+            CLIENT_SESSION_START_PATH,
+            ClientSessionStart(
+                session_id=session.session_id,
+                client_id=client_id,
+                expected_rounds=session.request.expected_rounds,
+                training_config=session.request.training_config,
+            ),
+        )
+        return response["model_signature"] == session.model_signature
+    except Exception:
+        logger.exception("Client session start failed at %s", base_url)
+        return False
+
+
+def _reconcile_clients(session: ActiveSession) -> None:
+    """Apply the latest registry snapshot at a boundary between rounds."""
+    desired = _client_registry().snapshot()
+    current_by_url = {url: client_id for client_id, url in session.active_clients.items()}
+
+    for base_url in sorted(set(current_by_url) - desired):
+        client_id = current_by_url[base_url]
+        session.active_clients.pop(client_id, None)
+        session.all_clients.pop(client_id, None)
+        try:
+            _client_post(
+                base_url,
+                CLIENT_SESSION_END_PATH,
+                ClientSessionEnd(session_id=session.session_id, client_id=client_id),
+            )
+        except Exception:
+            logger.exception("Could not release departed client at %s", base_url)
+
+    for base_url in sorted(desired - set(current_by_url)):
+        client_id = str(uuid.uuid4())
+        if _accept_client(session, client_id, base_url):
+            session.active_clients[client_id] = base_url
+            session.all_clients[client_id] = base_url
+        else:
+            try:
+                _client_post(
+                    base_url,
+                    CLIENT_SESSION_END_PATH,
+                    ClientSessionEnd(session_id=session.session_id, client_id=client_id),
+                )
+            except Exception:
+                logger.exception("Could not release rejected client at %s", base_url)
+
+
+def _bootstrap_session(
+    session_id: str,
+    request: SessionStartRequest,
+    candidate_urls: set[str],
+) -> None:
     global _active
     assigned = {
         str(uuid.uuid4()): base_url
-        for base_url in TRAINING_CLIENT_BASE_URLS
+        for base_url in candidate_urls
     }
     initializing = ActiveSession(
         session_id=session_id,
@@ -280,6 +452,10 @@ def _bootstrap_session(session_id: str, request: SessionStartRequest) -> None:
 def _start_round(session: ActiveSession) -> None:
     with _coordinator_lock:
         if _active is not session:
+            return
+        _reconcile_clients(session)
+        if len(session.active_clients) < session.request.min_clients:
+            _finish_session(session, False, "Client count fell below min_clients")
             return
         session.current_round += 1
         session.expected_clients = set(session.active_clients)
@@ -668,10 +844,11 @@ def session_start(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A federated session is already active",
             )
-        if request.min_clients > len(TRAINING_CLIENT_BASE_URLS):
+        _, trainable_clients, candidate_urls = _client_counts()
+        if request.min_clients > trainable_clients:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="min_clients exceeds configured training clients",
+                detail="min_clients exceeds trainable clients",
             )
         session_id = str(uuid.uuid4())
         # Reserve the coordinator immediately while client bootstrap runs.
@@ -685,7 +862,7 @@ def session_start(
         _write_status(
             {"status": "initializing", "session_id": session_id, "started_at": _now()}
         )
-    background_tasks.add_task(_bootstrap_session, session_id, request)
+    background_tasks.add_task(_bootstrap_session, session_id, request, candidate_urls)
     return {"status": "initializing", "session_id": session_id}
 
 
@@ -748,8 +925,7 @@ def readiness() -> dict[str, str]:
         probe = directory / ".write-probe"
         probe.touch()
         probe.unlink()
-        if not TRAINING_CLIENT_BASE_URLS:
-            raise RuntimeError("No training client base URLs are configured")
+        _client_registry()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"status": "ready"}
@@ -757,7 +933,15 @@ def readiness() -> dict[str, str]:
 
 @app.get("/status")
 def session_status() -> dict[str, Any]:
-    return _read_status()
+    result = _read_status()
+    registered, trainable, _ = _client_counts()
+    result.update(
+        {
+            "registered_clients": registered,
+            "trainable_clients": trainable,
+        }
+    )
+    return result
 
 
 @app.get("/evaluation-metrics")

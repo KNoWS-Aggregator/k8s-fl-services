@@ -8,7 +8,6 @@
     aggr:performs <prepare>, <train>, <evaluate> ;
     aggr:composition <client-data-flow> ;
     aggr:supportsEndpoint
-        <prepare-endpoint>,
         <prepared-data-endpoint>,
         <session-start-endpoint>,
         <train-endpoint>,
@@ -39,16 +38,6 @@
             fnoc:functionParameter <evaluationDataInput>
         ]
     ] .
-
-<prepare-endpoint>
-    a aggr:Endpoint ;
-    aggr:path "/prepare" ;
-    hydra:supportedOperation <prepare-operation> .
-
-<prepare-operation>
-    a hydra:Operation ;
-    hydra:method "POST" ;
-    aggr:executes <prepare> .
 
 <prepared-data-endpoint>
     a aggr:Endpoint ;

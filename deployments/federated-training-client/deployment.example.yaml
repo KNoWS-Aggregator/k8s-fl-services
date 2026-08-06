@@ -27,8 +27,6 @@ spec:
               value: "REPLACE_WITH_CASE_SLICE_URL"
             - name: DATASET
               value: "accellero"
-            - name: AUTHN
-              value: "REPLACE_WITH_AUTHN_URL"
             - name: DATA_DIR
               value: /app/data
           volumeMounts:
@@ -51,4 +49,3 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: federated-training-client-data
-

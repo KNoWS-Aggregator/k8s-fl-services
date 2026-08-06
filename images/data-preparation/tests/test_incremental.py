@@ -1,5 +1,6 @@
 import json
 import zipfile
+from unittest.mock import Mock
 
 import duckdb
 import pyarrow as pa
@@ -11,7 +12,6 @@ from data_preparation.settings import Settings
 
 def _settings(monkeypatch, tmp_path):
     monkeypatch.setenv("SOURCES", "https://kvasir.example/hospital/slices/case-test")
-    monkeypatch.setenv("AUTHN", "https://auth.example/realms/test")
     monkeypatch.setenv("DATASET", "accellero")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     return Settings.from_env()
@@ -31,6 +31,50 @@ def _fake_ingest(converter, participant_id, _urls):
         output,
     )
     return {"seconds": 0.0, "incomplete": {}}
+
+
+def test_discovery_queries_dataset_at_enrolled_pod_url(monkeypatch, tmp_path):
+    converter = Converter(_settings(monkeypatch, tmp_path))
+    responses = [
+        Mock(
+            json=lambda: {
+                "data": {
+                    "case": {
+                        "id": "case-test",
+                        "enrolled": [
+                            "https://participant.example/custom/kvasir/participant1/"
+                        ],
+                    }
+                }
+            }
+        ),
+        Mock(
+            json=lambda: {
+                "data": {
+                    "dataset": {
+                        "id": "dataset-test",
+                        "distributions": [
+                            {"id": "part-1", "downloadURL": "https://files.example/1"}
+                        ],
+                    }
+                }
+            }
+        ),
+    ]
+    requests = []
+
+    def fake_request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(converter, "_request", fake_request)
+
+    assert converter.discover() == {"participant1": ["https://files.example/1"]}
+    assert requests[0][1] == "https://kvasir.example/hospital/slices/case-test/query"
+    assert requests[1][1] == (
+        "https://participant.example/custom/kvasir/participant1/slices/accellero/query"
+    )
+    assert requests[1][2]["headers"] == {"Content-Type": "application/json"}
 
 
 def test_added_changed_and_removed_participants_are_applied_incrementally(

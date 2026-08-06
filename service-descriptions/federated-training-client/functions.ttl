@@ -2,45 +2,40 @@
 @prefix fno: <https://w3id.org/function/ontology#> .
 @prefix aggr: <https://w3id.org/aggregator#> .
 @prefix dct: <http://purl.org/dc/terms/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 <deploy>
     a fno:Function ;
     fno:name "Deploy federated training client" ;
     fno:expects (
-        <deploymentSources>
-        <deploymentDataset>
-        <deploymentAuthn>
-        <deploymentPollEnabled>
-        <deploymentPollInterval>
+        <caseSlice>
+        <datasetId>
+        <pollEnabled>
+        <pollInterval>
     ) ;
     fno:returns ( <deployedService> ) .
 
-<deploymentSources>
+<caseSlice>
     a fno:Parameter ;
-    fno:predicate <sourcesValue> ;
+    fno:predicate <caseSliceValue> ;
     fno:type xsd:anyURI ;
     fno:required true .
 
-<deploymentDataset>
+<datasetId>
     a fno:Parameter ;
-    fno:predicate <datasetValue> ;
+    fno:predicate <datasetIdValue> ;
     fno:type xsd:string ;
     fno:required true .
 
-<deploymentAuthn>
-    a fno:Parameter ;
-    fno:predicate <authnValue> ;
-    fno:type xsd:anyURI ;
-    fno:required true .
-
-<deploymentPollEnabled>
+<pollEnabled>
     a fno:Parameter ;
     fno:predicate <pollEnabledValue> ;
     fno:type xsd:boolean ;
     fno:required false .
 
-<deploymentPollInterval>
+<pollInterval>
     a fno:Parameter ;
     fno:predicate <pollIntervalValue> ;
     fno:type xsd:string ;
@@ -55,13 +50,7 @@
 <prepare>
     a fno:Function ;
     fno:name "Prepare hospital data" ;
-    fno:expects (
-        <sources>
-        <dataset>
-        <authn>
-        <pollEnabled>
-        <pollInterval>
-    ) ;
+    fno:expects ( <participantDatasets> ) ;
     fno:returns ( <preparedDataOutput> ) .
 
 <train>
@@ -97,35 +86,12 @@
     ) ;
     fno:returns ( <evaluationMetrics> ) .
 
-<sources>
+<participantDatasets>
     a fno:Parameter ;
-    fno:predicate <sourcesValue> ;
-    fno:type xsd:anyURI ;
-    fno:required true .
-
-<dataset>
-    a fno:Parameter ;
-    fno:predicate <datasetValue> ;
-    fno:type xsd:string ;
-    fno:required true .
-
-<authn>
-    a fno:Parameter ;
-    fno:predicate <authnValue> ;
-    fno:type xsd:anyURI ;
-    fno:required true .
-
-<pollEnabled>
-    a fno:Parameter ;
-    fno:predicate <pollEnabledValue> ;
-    fno:type xsd:boolean ;
-    fno:required false .
-
-<pollInterval>
-    a fno:Parameter ;
-    fno:predicate <pollIntervalValue> ;
-    fno:type xsd:string ;
-    fno:required false .
+    fno:predicate <participantDatasetsValue> ;
+    fno:type rdf:List ;
+    fno:required true ;
+    rdfs:comment "An RDF list of participant dataset-slice URIs." .
 
 <preparedDataOutput>
     a fno:Output ;

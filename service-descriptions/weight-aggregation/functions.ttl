@@ -7,8 +7,14 @@
 <deploy>
     a fno:Function ;
     fno:name "Deploy weight aggregation service" ;
-    fno:expects () ;
+    fno:expects ( <caseSlice> ) ;
     fno:returns ( <deployedService> ) .
+
+<caseSlice>
+    a fno:Parameter ;
+    fno:predicate <caseSliceValue> ;
+    fno:type xsd:anyURI ;
+    fno:required true .
 
 <deployedService>
     a fno:Output ;
@@ -85,6 +91,18 @@
 <startedSessionId>
     a fno:Output ;
     fno:predicate <sessionIdValue> .
+
+<registeredClients>
+    a fno:Parameter ;
+    fno:predicate <registeredClientsValue> ;
+    fno:type xsd:nonNegativeInteger ;
+    fno:required false .
+
+<trainableClients>
+    a fno:Parameter ;
+    fno:predicate <trainableClientsValue> ;
+    fno:type xsd:nonNegativeInteger ;
+    fno:required false .
 
 <roundId>
     a fno:Parameter ;

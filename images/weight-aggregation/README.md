@@ -4,13 +4,19 @@ This long-running service coordinates federated sessions and performs
 example-weighted FedAvg. It has its own persistent volume and does not mount
 the data-preparation/model-training shared volume.
 
-## Configured clients
+## Discovered clients
 
-Training services are currently a hardcoded list of base URLs in
-`src/weight_aggregation/client_config.py`. The coordinator appends
-`/session/start`, `/train`, and `/session/end`.
+`CASE_SLICE` is the researcher case-slice URL. The service queries its
+`trainingServices` field at startup and on the `POLL_INTERVAL` schedule
+(`@hourly` by default). `POLL_ENABLED` controls scheduled polling and defaults
+to `true`. Authentication is intentionally left to the deployment platform.
 
-Each session assigns a fresh random client ID to every available training
+Membership changes discovered during training or evaluation are buffered.
+Immediately before the next training round, departed clients are released and
+new clients are initialized. The client set expected by an in-progress round
+therefore never changes.
+
+Each session assigns a fresh random client ID to every discovered training
 service. Clients whose model signature differs from the canonical model are
 excluded.
 
@@ -77,6 +83,12 @@ reported number of examples.
 - `GET /evaluation-metrics`
 - `GET /healthz`
 - `GET /readyz`
+
+`GET /status` includes `registered_clients` and `trainable_clients`. The latter
+is determined by probing each registered training service: it must have a valid
+prepared dataset and must either be unassigned or assigned to this coordinator's
+current session. Unreachable services and services assigned to another
+coordinator are not trainable.
 
 ## Logical service description
 

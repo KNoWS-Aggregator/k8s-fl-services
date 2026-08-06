@@ -35,7 +35,6 @@ PREDICATES = {OBSERVES, HAS_TIMESTAMP, HAS_VALUE}
 class Converter:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._tokens: dict[str, tuple[str, float]] = {}
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         last_error: Exception | None = None
@@ -55,38 +54,11 @@ class Converter:
                 time.sleep(self.settings.retry_backoff_base * (2**attempt) + random.random())
         raise RuntimeError("Request failed") from last_error
 
-    def _token(self, participant_id: str) -> str:
-        cached = self._tokens.get(participant_id)
-        if cached and cached[1] > time.time() + 5:
-            return cached[0]
-        client_id, client_secret = self.settings.auth_credentials(participant_id)
+    def _query(self, pod_url: str, pod_id: str, slice_id: str, query: str) -> dict:
         response = self._request(
             "POST",
-            f"{self.settings.keycloak_realm_url}/protocol/openid-connect/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-            timeout=self.settings.request_timeout_seconds,
-        )
-        payload = response.json()
-        token = payload["access_token"]
-        self._tokens[participant_id] = (token, time.time() + payload.get("expires_in", 60))
-        return token
-
-    def _auth(self, participant_id: str) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token(participant_id)}"}
-
-    def _pod_url(self, pod_id: str) -> str:
-        return f"{self.settings.kvasir_server}/{quote(pod_id, safe='')}"
-
-    def _query(self, pod_id: str, slice_id: str, query: str) -> dict:
-        response = self._request(
-            "POST",
-            f"{self._pod_url(pod_id)}/slices/{quote(slice_id, safe='')}/query",
-            headers={**self._auth(pod_id), "Content-Type": "application/json"},
+            f"{pod_url.rstrip('/')}/slices/{quote(slice_id, safe='')}/query",
+            headers={"Content-Type": "application/json"},
             json={"query": query},
             timeout=self.settings.request_timeout_seconds,
         )
@@ -113,10 +85,7 @@ class Converter:
         response = self._request(
             "POST",
             f"{self.settings.sources}/query",
-            headers={
-                **self._auth(self.settings.source_pod_id),
-                "Content-Type": "application/json",
-            },
+            headers={"Content-Type": "application/json"},
             json={"query": "{ case { id enrolled } }"},
             timeout=self.settings.request_timeout_seconds,
         )
@@ -130,6 +99,7 @@ class Converter:
         for enrolled_url in dict.fromkeys(enrolled):
             participant_id = self._pod_id(enrolled_url)
             data = self._query(
+                enrolled_url,
                 participant_id,
                 self.settings.dataset_id,
                 "{ dataset { id distributions { id downloadURL } } }",
@@ -143,7 +113,7 @@ class Converter:
         response = self._request(
             "GET",
             url,
-            headers={**self._auth(participant_id), "Range": "bytes=0-0"},
+            headers={"Range": "bytes=0-0"},
             timeout=self.settings.request_timeout_seconds,
         )
         return int(response.headers["Content-Range"].split("/")[-1])
@@ -155,7 +125,7 @@ class Converter:
                 response = self._request(
                     "GET",
                     url,
-                    headers={**self._auth(participant_id), "Range": f"bytes={start}-{end}"},
+                    headers={"Range": f"bytes={start}-{end}"},
                     stream=True,
                     timeout=self.settings.download_timeout_seconds,
                 )

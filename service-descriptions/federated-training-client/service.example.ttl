@@ -16,8 +16,6 @@
 
 <https://aggregator.example/services/federated-training-client-1#prepared-data>
     a dcat:Dataset ;
-    aggr:forOutput
-        <https://example.org/k8s-fl-services/federated-training-client/preparedDataOutput> ;
     dcat:distribution
         <https://aggregator.example/services/federated-training-client-1#prepared-data-archive> .
 
@@ -29,8 +27,6 @@
 
 <https://aggregator.example/services/federated-training-client-1#weights>
     a dcat:Dataset ;
-    aggr:forOutput
-        <https://example.org/k8s-fl-services/federated-training-client/clientWeights> ;
     dcat:distribution
         <https://aggregator.example/services/federated-training-client-1#weights-distribution> .
 
@@ -43,8 +39,6 @@
 
 <https://aggregator.example/services/federated-training-client-1#training-metrics>
     a dcat:Dataset ;
-    aggr:forOutput
-        <https://example.org/k8s-fl-services/federated-training-client/trainingMetrics> ;
     dcat:distribution
         <https://aggregator.example/services/federated-training-client-1#training-metrics-distribution> .
 
@@ -56,14 +50,10 @@
         <https://aggregator.example/services/federated-training-client-1/metrics> .
 
 <https://aggregator.example/services/federated-training-client-1#evaluation-data>
-    a dcat:Dataset ;
-    aggr:forOutput
-        <https://example.org/k8s-fl-services/federated-training-client/evaluationDataOutput> .
+    a dcat:Dataset .
 
 <https://aggregator.example/services/federated-training-client-1#evaluation-metrics>
     a dcat:Dataset ;
-    aggr:forOutput
-        <https://example.org/k8s-fl-services/federated-training-client/evaluationMetrics> ;
     dcat:distribution
         <https://aggregator.example/services/federated-training-client-1#evaluation-metrics-distribution> .
 

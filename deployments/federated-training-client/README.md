@@ -16,9 +16,8 @@ Replace the placeholder source and authentication values first.
 This example does not define external routing. The aggregator platform must
 publish a single logical service root and route:
 
-- `/prepare` and `/results` to the data-preparation port;
+- `/results` to the data-preparation port;
 - session, training, weights, metrics, and evaluation paths to the
   model-training port.
 
 Container health and readiness probes can address their Pod ports directly.
-

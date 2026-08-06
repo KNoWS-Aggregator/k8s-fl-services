@@ -81,7 +81,8 @@
 <get-status-operation>
     a hydra:Operation ;
     hydra:method "GET" ;
-    aggr:returnsParameter <sessionId> .
+    aggr:returnsParameter
+        <sessionId>, <registeredClients>, <trainableClients> .
 
 <health-endpoint>
     a aggr:Endpoint ;

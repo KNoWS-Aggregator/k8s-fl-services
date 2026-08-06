@@ -1,6 +1,7 @@
 from fastapi import BackgroundTasks
 import numpy as np
 import pytest
+from unittest.mock import Mock
 
 from common.messages import (
     EvaluationMetrics,
@@ -13,6 +14,14 @@ from fl_model import weight_signature
 from weight_aggregation import main
 
 
+class FakeRegistry:
+    def __init__(self, urls):
+        self.urls = set(urls)
+
+    def snapshot(self):
+        return set(self.urls)
+
+
 def _run_tasks(tasks):
     for task in tasks.tasks:
         task.func(*task.args, **task.kwargs)
@@ -21,9 +30,7 @@ def _run_tasks(tasks):
 def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
-        main,
-        "TRAINING_CLIENT_BASE_URLS",
-        ["http://training-a", "http://training-b"],
+        main, "_registry", FakeRegistry(["http://training-a", "http://training-b"])
     )
     initial = weights_to_bytes([np.array([1.0])])
     signature = weight_signature(bytes_to_weights(initial))
@@ -46,6 +53,15 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
 
     monkeypatch.setattr(main, "dispatch_round", fake_dispatch)
     monkeypatch.setattr(main, "dispatch_evaluation", lambda **_kwargs: set())
+    monkeypatch.setattr(
+        main,
+        "_client_counts",
+        lambda: (
+            2,
+            2,
+            {"http://training-a", "http://training-b"},
+        ),
+    )
 
     tasks = BackgroundTasks()
     response = main.session_start(
@@ -121,6 +137,7 @@ def test_failed_client_is_removed_while_remaining_clients_continue(monkeypatch, 
     )
     main._active = session
     monkeypatch.setattr(main, "dispatch_evaluation", lambda **_kwargs: set())
+    monkeypatch.setattr(main, "_client_counts", lambda: (3, 3, {"http://a", "http://b", "http://c"}))
 
     main._record_result(
         TrainingResultMessage(
@@ -160,3 +177,88 @@ def test_failed_client_is_removed_while_remaining_clients_continue(monkeypatch, 
     promoted = bytes_to_weights(main._global_weights_path().read_bytes())
     assert np.allclose(promoted[0], np.array([3.5]))
     assert main.session_status()["status"] == "succeeded"
+
+
+def test_registry_changes_are_applied_only_when_next_round_starts(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    registry = FakeRegistry(["http://training-a"])
+    monkeypatch.setattr(main, "_registry", registry)
+    weights = weights_to_bytes([np.array([1.0])])
+    signature = weight_signature(bytes_to_weights(weights))
+    session = main.ActiveSession(
+        session_id="session-membership",
+        request=main.SessionStartRequest(expected_rounds=2, min_clients=1),
+        all_clients={"a": "http://training-a"},
+        active_clients={"a": "http://training-a"},
+        model_signature=signature,
+        current_round=1,
+        global_weights=weights,
+        expected_clients={"a"},
+    )
+    main._active = session
+    monkeypatch.setattr(
+        main,
+        "_client_post",
+        lambda _base, path, _message: (
+            {"model_signature": signature} if path == main.CLIENT_SESSION_START_PATH else {}
+        ),
+    )
+    dispatched = {}
+    monkeypatch.setattr(main, "dispatch_round", lambda **kwargs: dispatched.update(kwargs) or set())
+
+    registry.urls = {"http://training-b"}
+    assert session.expected_clients == {"a"}
+    assert session.active_clients == {"a": "http://training-a"}
+
+    main._start_round(session)
+
+    assert session.current_round == 2
+    assert set(session.active_clients.values()) == {"http://training-b"}
+    assert session.expected_clients == set(session.active_clients)
+    assert set(dispatched["client_urls"].values()) == {"http://training-b/train"}
+    if session.timer:
+        session.timer.cancel()
+
+
+def test_client_trainability_requires_data_and_no_foreign_session(monkeypatch):
+    payload = {
+        "prepared_data": {"valid": True},
+        "session": {"active": True, "session_id": "session-a"},
+    }
+    monkeypatch.setattr(
+        main.httpx,
+        "get",
+        lambda *_args, **_kwargs: Mock(
+            raise_for_status=lambda: None,
+            json=lambda: payload,
+        ),
+    )
+
+    assert main._is_trainable("http://training-a", "session-a") is True
+    assert main._is_trainable("http://training-a", "session-b") is False
+    assert main._is_trainable("http://training-a", None) is False
+
+    payload["prepared_data"]["valid"] = False
+    payload["session"] = {"active": False, "session_id": None}
+    assert main._is_trainable("http://training-a", None) is False
+
+
+def test_status_reports_registered_and_trainable_client_counts(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        main,
+        "_registry",
+        FakeRegistry(["http://training-a", "http://training-b", "http://training-c"]),
+    )
+    monkeypatch.setattr(
+        main,
+        "_is_trainable",
+        lambda url, _session_id: url == "http://training-a",
+    )
+    main._active = None
+
+    payload = main.session_status()
+
+    assert payload["status"] == "idle"
+    assert payload["registered_clients"] == 3
+    assert payload["trainable_clients"] == 1
