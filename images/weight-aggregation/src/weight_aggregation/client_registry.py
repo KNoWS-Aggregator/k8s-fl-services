@@ -5,7 +5,7 @@ import threading
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-import httpx
+from common.http_client import request
 from croniter import croniter
 
 
@@ -19,7 +19,8 @@ class ClientRegistry:
         self._urls: set[str] = set()
 
     def refresh(self) -> dict[str, list[str]]:
-        response = httpx.post(
+        response = request(
+            "POST",
             f"{self.case_slice}/query",
             headers={"Content-Type": "application/json"},
             json={"query": "{ case { id trainingServices } }"},

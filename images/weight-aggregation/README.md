@@ -9,7 +9,9 @@ the data-preparation/model-training shared volume.
 `CASE_SLICE` is the researcher case-slice URL. The service queries its
 `trainingServices` field at startup and on the `POLL_INTERVAL` schedule
 (`@hourly` by default). `POLL_ENABLED` controls scheduled polling and defaults
-to `true`. Authentication is intentionally left to the deployment platform.
+to `true`. When `EGRESS_UMA_URL` is set, all outbound case-slice requests and
+client callbacks are sent through `<EGRESS_UMA_URL>/fetch`. Authentication is
+intentionally left to the deployment platform.
 
 Membership changes discovered during training or evaluation are buffered.
 Immediately before the next training round, departed clients are released and

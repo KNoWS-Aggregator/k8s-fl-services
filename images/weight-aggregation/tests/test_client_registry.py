@@ -20,7 +20,7 @@ def test_refresh_reads_training_services_from_case_slice(monkeypatch):
             raise_for_status=lambda: None,
         )
     )
-    monkeypatch.setattr("weight_aggregation.client_registry.httpx.post", request)
+    monkeypatch.setattr("weight_aggregation.client_registry.request", request)
     registry = ClientRegistry("https://researcher.example/slices/case-study/")
 
     changes = registry.refresh()
@@ -37,6 +37,7 @@ def test_refresh_reads_training_services_from_case_slice(monkeypatch):
         "https://hospital-b.example/training",
     }
     assert request.call_args.args == (
+        "POST",
         "https://researcher.example/slices/case-study/query",
     )
     assert request.call_args.kwargs["json"] == {

@@ -1,8 +1,11 @@
 """Disk-backed Kvasir RDF-to-Parquet conversion pipeline."""
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
+import logging
+import os
 import random
 import shutil
 import time
@@ -20,6 +23,8 @@ import requests
 
 from .settings import Settings
 
+logger = logging.getLogger(__name__)
+
 METRICS = {
     "smartphone.acceleration.x": "ACC_x",
     "smartphone.acceleration.y": "ACC_y",
@@ -36,11 +41,15 @@ class Converter:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    @staticmethod
+    def _egress_uma_url() -> str:
+        return os.getenv("EGRESS_UMA_URL", "").rstrip("/")
+
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         last_error: Exception | None = None
         for attempt in range(self.settings.max_retries):
             try:
-                response = requests.request(method, url, **kwargs)
+                response = self._send_request(method, url, **kwargs)
                 if response.status_code == 429 or response.status_code >= 500:
                     raise requests.HTTPError(
                         f"{response.status_code} {response.reason} from {url}", response=response
@@ -51,8 +60,48 @@ class Converter:
                 last_error = exc
                 if attempt + 1 == self.settings.max_retries:
                     raise
-                time.sleep(self.settings.retry_backoff_base * (2**attempt) + random.random())
+                delay = self.settings.retry_backoff_base * (2**attempt) + random.random()
+                logger.warning(
+                    "%s %s failed (attempt %d/%d); retrying in %.2fs: %s",
+                    method, url, attempt + 1, self.settings.max_retries, delay, exc,
+                )
+                time.sleep(delay)
         raise RuntimeError("Request failed") from last_error
+
+    def _send_request(self, method: str, url: str, **kwargs) -> requests.Response:
+        egress_uma_url = self._egress_uma_url()
+        if not egress_uma_url:
+            return requests.request(method, url, **kwargs)
+
+        headers = dict(kwargs.pop("headers", {}) or {})
+        json_payload = kwargs.pop("json", None)
+        data_payload = kwargs.pop("data", None)
+        body = kwargs.pop("body", None)
+        stream = kwargs.pop("stream", False)
+        timeout = kwargs.pop("timeout", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unsupported request kwargs for UMA proxy: {unexpected}")
+
+        encoded_body: bytes | None = None
+        if json_payload is not None:
+            headers.setdefault("Content-Type", "application/json")
+            encoded_body = json.dumps(json_payload).encode("utf-8")
+        elif data_payload is not None:
+            encoded_body = data_payload if isinstance(data_payload, bytes) else str(data_payload).encode("utf-8")
+        elif body is not None:
+            encoded_body = body if isinstance(body, bytes) else str(body).encode("utf-8")
+
+        payload = {"url": url, "method": method, "headers": headers}
+        if encoded_body:
+            payload["bodyBase64"] = base64.b64encode(encoded_body).decode("ascii")
+
+        return requests.post(
+            f"{egress_uma_url}/fetch",
+            json=payload,
+            stream=stream,
+            timeout=timeout,
+        )
 
     def _query(self, pod_url: str, pod_id: str, slice_id: str, query: str) -> dict:
         response = self._request(
@@ -82,6 +131,7 @@ class Converter:
         return pod_id
 
     def discover(self) -> dict[str, list[str]]:
+        logger.info("Discovering participant datasets from %s", self.settings.sources)
         response = self._request(
             "POST",
             f"{self.settings.sources}/query",
@@ -107,7 +157,9 @@ class Converter:
             distributions = (data.get("dataset") or {}).get("distributions") or []
             urls = list(dict.fromkeys(item.get("downloadURL") for item in distributions))
             participants[participant_id] = [url for url in urls if url]
-        return {participant: urls for participant, urls in participants.items() if urls}
+        discovered = {participant: urls for participant, urls in participants.items() if urls}
+        logger.info("Discovered %d participants with downloadable data", len(discovered))
+        return discovered
 
     def _file_size(self, participant_id: str, url: str) -> int:
         response = self._request(
@@ -231,13 +283,16 @@ class Converter:
 
     def _ingest_participant(self, participant_id: str, urls: list[str]) -> dict:
         started = time.perf_counter()
+        logger.info("Ingesting participant %s (%d files)", participant_id, len(urls))
         incomplete = {}
         for index, url in enumerate(urls, start=1):
             name = self._safe_name(url, index)
             incomplete[name] = self._stream_file(
                 participant_id, url, self.settings.raw_dir / participant_id / f"{name}.parquet"
             )
-        return {"seconds": time.perf_counter() - started, "incomplete": incomplete}
+        seconds = time.perf_counter() - started
+        logger.info("Ingested participant %s in %.2fs", participant_id, seconds)
+        return {"seconds": seconds, "incomplete": incomplete}
 
     def _pivot(self, participant_ids: list[str]) -> dict:
         started = time.perf_counter()
@@ -433,6 +488,11 @@ class Converter:
             if previous[participant].get("fingerprint") != current_fingerprints[participant]
         )
         to_process = added + changed
+        logger.info(
+            "Dataset changes: %d added, %d changed, %d removed, %d unchanged",
+            len(added), len(changed), len(removed),
+            len(participant_files) - len(to_process),
+        )
         self._cleanup_removed(to_process)
 
         ingest_started = time.perf_counter()
@@ -449,6 +509,7 @@ class Converter:
                     ingested[participant] = future.result()
                 except Exception as exc:
                     failures[participant] = str(exc)
+                    logger.exception("Participant %s ingestion failed", participant)
 
         pivot = self._pivot([participant for participant in to_process if participant not in failures])
         if failures:
@@ -457,6 +518,7 @@ class Converter:
         needs_publish = bool(to_process or removed) or not self.settings.result_archive_path.is_file()
         if needs_publish:
             generation = str(uuid.uuid4())
+            logger.info("Publishing dataset generation %s", generation)
             self._publish_dataset_state("updating", generation)
             try:
                 self._update_database(to_process, removed)
@@ -468,6 +530,7 @@ class Converter:
             else:
                 self._publish_dataset_state("ready", generation)
                 self._cleanup_removed(removed)
+                logger.info("Published dataset generation %s", generation)
         elif self.settings.manifest_path.is_file():
             manifest = json.loads(self.settings.manifest_path.read_text(encoding="utf-8"))
             generation = manifest.get("generation")

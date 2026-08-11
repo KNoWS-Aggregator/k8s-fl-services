@@ -226,8 +226,8 @@ def test_client_trainability_requires_data_and_no_foreign_session(monkeypatch):
         "session": {"active": True, "session_id": "session-a"},
     }
     monkeypatch.setattr(
-        main.httpx,
-        "get",
+        main,
+        "send_request",
         lambda *_args, **_kwargs: Mock(
             raise_for_status=lambda: None,
             json=lambda: payload,

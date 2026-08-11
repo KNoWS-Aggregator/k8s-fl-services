@@ -22,6 +22,8 @@ Required environment variables:
 
 Optional environment variables:
 
+- `EGRESS_UMA_URL`: when set, outbound case-slice queries and participant file
+  downloads are sent through `<EGRESS_UMA_URL>/fetch`
 - `DATA_DIR` (`/app/data`)
 - `PORT` (`8080`)
 - `LOG_LEVEL` (`INFO`)

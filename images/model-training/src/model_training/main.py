@@ -31,7 +31,10 @@ from common.messages import (
 from fl_model import create_initial_weights
 from .train import run_evaluation, run_training
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(threadName)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Federated model training", version="0.1.0")
@@ -240,6 +243,10 @@ def _evaluation_session_for(msg: EvaluationInitMessage) -> ClientSessionStart:
 
 @app.post("/session/start")
 def session_start(request: ClientSessionStart) -> dict[str, Any]:
+    logger.info(
+        "Session start requested (session=%s, client=%s, rounds=%d)",
+        request.session_id, request.client_id, request.expected_rounds,
+    )
     prepared_data = _prepared_data_status()
     if not prepared_data["valid"]:
         raise HTTPException(
@@ -276,6 +283,7 @@ def session_start(request: ClientSessionStart) -> dict[str, Any]:
             "started_at": _now(),
         }
     )
+    logger.info("Session started (session=%s, client=%s)", request.session_id, request.client_id)
     return {
         "status": "started",
         "session_id": request.session_id,
@@ -303,6 +311,7 @@ def session_end(request: ClientSessionEnd) -> dict[str, str]:
             "finished_at": _now(),
         }
     )
+    logger.info("Session ended (session=%s, client=%s)", request.session_id, request.client_id)
     return {"status": "ended"}
 
 
@@ -317,6 +326,7 @@ async def train_endpoint(
 
     cached = _cached_result(msg.session_id, msg.client_id, msg.round_id)
     if cached:
+        logger.info("Round %d already completed; reporting cached result", msg.round_id)
         background_tasks.add_task(_report_cached, msg.reply_url, cached)
         return {
             "status": "already_completed",
@@ -358,6 +368,10 @@ async def train_endpoint(
                 "finished_at": None,
             }
         )
+        logger.info(
+            "Accepted training round %d (session=%s, client=%s, weights_bytes=%d)",
+            msg.round_id, msg.session_id, msg.client_id, len(global_weights),
+        )
         background_tasks.add_task(
             _run_and_report,
             msg,
@@ -380,6 +394,7 @@ async def evaluate_endpoint(
     session = _evaluation_session_for(msg)
     cached = _cached_evaluation(msg.session_id, msg.client_id, msg.round_id)
     if cached:
+        logger.info("Round %d evaluation already completed; reporting cached result", msg.round_id)
         background_tasks.add_task(_report_cached_evaluation, msg.reply_url, cached)
         return {
             "status": "already_completed",
@@ -419,6 +434,10 @@ async def evaluate_endpoint(
                 "finished_at": None,
             }
         )
+        logger.info(
+            "Accepted evaluation round %d (session=%s, client=%s, weights_bytes=%d)",
+            msg.round_id, msg.session_id, msg.client_id, len(global_weights),
+        )
         background_tasks.add_task(
             _run_evaluation_and_report,
             msg,
@@ -432,6 +451,7 @@ async def evaluate_endpoint(
 
 
 def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> None:
+    logger.info("Training round %d started for client %s", msg.round_id, msg.client_id)
     try:
         result, local_weights = run_training(msg, config, global_weights)
     except Exception as exc:
@@ -456,6 +476,11 @@ def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> 
         except Exception:
             logger.exception("Could not report failure for round %d", msg.round_id)
     else:
+        logger.info(
+            "Training round %d completed (examples=%d, loss=%s, accuracy=%s)",
+            msg.round_id, result.metrics.num_examples,
+            result.metrics.train_loss, result.metrics.train_acc,
+        )
         _cache_result(result, local_weights)
         _write_status(
             {
@@ -509,6 +534,7 @@ def _run_evaluation_and_report(
     config,
     global_weights: bytes,
 ) -> None:
+    logger.info("Evaluation round %d started for client %s", msg.round_id, msg.client_id)
     try:
         result = run_evaluation(msg, config, global_weights)
     except Exception as exc:
@@ -533,6 +559,11 @@ def _run_evaluation_and_report(
         except Exception:
             logger.exception("Could not report evaluation failure for round %d", msg.round_id)
     else:
+        logger.info(
+            "Evaluation round %d completed (examples=%d, loss=%s, accuracy=%s)",
+            msg.round_id, result.metrics.num_examples,
+            result.metrics.eval_loss, result.metrics.eval_accuracy,
+        )
         _cache_evaluation(result)
         try:
             post_message(msg.reply_url, result)

@@ -13,11 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from common.http_client import request as send_request
 from common.messages import (
     ClientSessionEnd,
     ClientSessionStart,
@@ -35,7 +35,10 @@ from .aggregate import aggregate_evaluation_metrics, federated_average
 from .client_registry import ClientRegistry, next_poll_delay
 from .dispatch import dispatch_evaluation, dispatch_round
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(threadName)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 TRAIN_PATH = "/train"
@@ -135,7 +138,7 @@ def _refresh_clients() -> None:
 
 def _is_trainable(base_url: str, own_session_id: str | None) -> bool:
     try:
-        response = httpx.get(f"{base_url.rstrip('/')}/status", timeout=10)
+        response = send_request("GET", f"{base_url.rstrip('/')}/status", timeout=10)
         response.raise_for_status()
         payload = response.json()
         prepared = (payload.get("prepared_data") or {}).get("valid") is True
@@ -189,6 +192,7 @@ def _poll_enabled() -> bool:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    logger.info("Weight aggregation service starting")
     poll_thread = None
     try:
         _refresh_clients()
@@ -210,6 +214,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        logger.info("Weight aggregation service stopping")
         _stop_polling.set()
         if poll_thread:
             poll_thread.join(timeout=5)
@@ -279,7 +284,8 @@ def _initial_global_weights() -> tuple[bytes, str, str]:
 
 
 def _client_post(base_url: str, path: str, message: BaseModel) -> dict:
-    response = httpx.post(
+    response = send_request(
+        "POST",
         f"{base_url.rstrip('/')}{path}",
         json=message.model_dump(mode="json"),
         timeout=60,
@@ -366,6 +372,10 @@ def _bootstrap_session(
         str(uuid.uuid4()): base_url
         for base_url in candidate_urls
     }
+    logger.info(
+        "Bootstrapping session %s with %d candidates (minimum=%d, rounds=%d)",
+        session_id, len(candidate_urls), request.min_clients, request.expected_rounds,
+    )
     initializing = ActiveSession(
         session_id=session_id,
         request=request,
@@ -426,6 +436,7 @@ def _bootstrap_session(
                 }
             )
             _persist_session(session, "running")
+        logger.info("Session %s started with %d clients", session_id, len(accepted))
         _start_round(session)
     except Exception as exc:
         logger.exception("Could not bootstrap session %s", session_id)
@@ -480,6 +491,11 @@ def _start_round(session: ActiveSession) -> None:
                 "started_at": _now(),
             }
         )
+        logger.info(
+            "Starting training round %d/%d for %d clients (session=%s)",
+            session.current_round, session.request.expected_rounds,
+            len(session.active_clients), session.session_id,
+        )
     failed = dispatch_round(
         session_id=session.session_id,
         round_id=session.current_round,
@@ -518,6 +534,10 @@ def _record_failure(session_id: str, round_id: int, client_id: str, error: str) 
         session.expected_clients.discard(client_id)
         session.active_clients.pop(client_id, None)
         session.failed_clients[client_id] = error
+        logger.warning(
+            "Training failed for client %s in round %d (session=%s): %s",
+            client_id, round_id, session_id, error,
+        )
         _advance_if_ready(session)
 
 
@@ -544,6 +564,11 @@ def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
             return
         session.weights_by_client[result.client_id] = weights
         session.metrics_by_client[result.client_id] = result.metrics
+        logger.info(
+            "Received training result from client %s for round %d (%d/%d)",
+            result.client_id, result.round_id, len(session.weights_by_client),
+            len(session.expected_clients),
+        )
         round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
         client_dir = round_dir / "clients" / result.client_id
         client_dir.mkdir(parents=True, exist_ok=True)
@@ -603,6 +628,10 @@ def _start_evaluation(session: ActiveSession) -> None:
                 "started_at": _now(),
             }
         )
+        logger.info(
+            "Starting evaluation for round %d with %d clients (session=%s)",
+            session.current_round, len(session.active_clients), session.session_id,
+        )
     failed = dispatch_evaluation(
         session_id=session.session_id,
         round_id=session.current_round,
@@ -654,6 +683,10 @@ def _record_evaluation_failure(
         session.expected_clients.discard(client_id)
         session.active_clients.pop(client_id, None)
         session.failed_clients[client_id] = error
+        logger.warning(
+            "Evaluation failed for client %s in round %d (session=%s): %s",
+            client_id, round_id, session_id, error,
+        )
         _advance_evaluation_if_ready(session)
 
 
@@ -671,6 +704,11 @@ def _record_evaluation_result(result: EvaluationResultMessage) -> None:
         if result.client_id in session.evaluation_metrics_by_client:
             return
         session.evaluation_metrics_by_client[result.client_id] = result.metrics
+        logger.info(
+            "Received evaluation from client %s for round %d (%d/%d)",
+            result.client_id, result.round_id,
+            len(session.evaluation_metrics_by_client), len(session.expected_clients),
+        )
         try:
             session.aggregated_evaluation_metrics = aggregate_evaluation_metrics(
                 session.evaluation_metrics_by_client
@@ -778,6 +816,12 @@ def _finish_session(
             },
         )
     state = "succeeded" if success else "failed"
+    log = logger.info if success else logger.error
+    log(
+        "Session %s %s after %d rounds (failed_clients=%d, error=%s)",
+        session.session_id, state, session.current_round,
+        len(session.failed_clients), error,
+    )
     _persist_session(session, state)
     _write_status(
         {

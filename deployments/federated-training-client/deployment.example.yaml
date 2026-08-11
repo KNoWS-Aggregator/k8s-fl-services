@@ -27,6 +27,8 @@ spec:
               value: "REPLACE_WITH_CASE_SLICE_URL"
             - name: DATASET
               value: "accellero"
+            - name: EGRESS_UMA_URL
+              value: "REPLACE_WITH_EGRESS_UMA_URL"
             - name: DATA_DIR
               value: /app/data
           volumeMounts:
@@ -40,6 +42,8 @@ spec:
           env:
             - name: PORT
               value: "8081"
+            - name: EGRESS_UMA_URL
+              value: "REPLACE_WITH_EGRESS_UMA_URL"
             - name: DATA_DIR
               value: /app/data
           volumeMounts:

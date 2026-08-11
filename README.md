@@ -129,7 +129,9 @@ shared volume.
 
 The example demonstrates container placement and storage only. The aggregator
 platform remains responsible for substituting function inputs, publishing the
-service endpoints, and creating the final workload.
+service endpoints, creating the final workload, and injecting
+`EGRESS_UMA_URL` when outbound traffic must traverse the aggregator UMA egress
+proxy.
 
 ## Adding an image
 

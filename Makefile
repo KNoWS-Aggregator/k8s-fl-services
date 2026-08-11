@@ -2,12 +2,13 @@ SHELL := /bin/sh
 
 REGISTRY ?= ghcr.io
 GITHUB_ORG ?= knows-aggregator
+REPO = $(shell basename $(shell git rev-parse --show-toplevel))
 TAG ?= latest
 
 # Add an image here only after images/<name>/Dockerfile is ready to build.
 IMAGES := data-preparation model-training weight-aggregation
 
-IMAGE_PREFIX := $(REGISTRY)/$(GITHUB_ORG)
+IMAGE_PREFIX := $(REGISTRY)/$(GITHUB_ORG)/$(REPO)
 SELECTED_IMAGES := $(if $(strip $(CONTAINER)),$(strip $(CONTAINER)),$(IMAGES))
 
 .PHONY: help containers-list containers-validate containers-login containers-build containers-push
@@ -56,10 +57,12 @@ containers-build: containers-validate
 			.; \
 	done
 
-containers-push: containers-build
+containers-push:
 	@set -eu; \
 	for name in $(SELECTED_IMAGES); do \
 		image="$(IMAGE_PREFIX)/$$name:$(TAG)"; \
 		echo "Pushing $$image"; \
 		docker push "$$image"; \
 	done
+
+containers-all: containers-build containers-push

@@ -16,7 +16,10 @@ from fastapi.responses import FileResponse
 from .converter import Converter
 from .settings import Settings
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(threadName)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -43,6 +46,7 @@ def _prepare() -> None:
     global _state
     try:
         settings = Settings.from_env()
+        logger.info("Starting data preparation (data_dir=%s)", settings.data_dir)
         result = Converter(settings).run()
         _state = {
             **_state,
@@ -50,6 +54,12 @@ def _prepare() -> None:
             "finished_at": _now(),
             "result": _public_result(result),
         }
+        logger.info(
+            "Data preparation succeeded in %.2fs (participants=%d, published=%s)",
+            result["total_seconds"],
+            result["participants_discovered"],
+            result["published"],
+        )
     except Exception as exc:
         logger.exception("Data preparation failed")
         _state = {**_state, "status": "failed", "finished_at": _now(), "error": str(exc)}
@@ -59,6 +69,7 @@ def _prepare() -> None:
 def _start_preparation() -> bool:
     global _state
     if not _lock.acquire(blocking=False):
+        logger.info("Data preparation trigger ignored because a run is already active")
         return False
     _state = {"status": "running", "started_at": _now(), "finished_at": None}
     threading.Thread(target=_prepare, name="data-preparation", daemon=True).start()
@@ -70,6 +81,7 @@ def _poll_forever(settings: Settings) -> None:
     schedule = croniter(settings.poll_interval, datetime.now(timezone.utc))
     while not _stop_polling.is_set():
         next_poll = schedule.get_next(datetime)
+        logger.info("Next data preparation poll scheduled for %s", next_poll.isoformat())
         _state = {**_state, "next_poll_at": next_poll.isoformat()}
         delay = max(0.0, (next_poll - datetime.now(timezone.utc)).total_seconds())
         if _stop_polling.wait(delay):
@@ -79,11 +91,13 @@ def _poll_forever(settings: Settings) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    logger.info("Data preparation service starting")
     _start_preparation()
     poll_thread = None
     try:
         settings = Settings.from_env()
         if settings.poll_enabled:
+            logger.info("Periodic polling enabled (schedule=%s)", settings.poll_interval)
             _stop_polling.clear()
             poll_thread = threading.Thread(
                 target=_poll_forever,
@@ -97,6 +111,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        logger.info("Data preparation service stopping")
         _stop_polling.set()
         if poll_thread:
             poll_thread.join(timeout=5)
