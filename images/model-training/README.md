@@ -121,6 +121,11 @@ Repeating the currently running round is idempotent. Successful result messages
 and weights are cached under `/app/data/model-training/rounds`; repeating a
 completed round re-sends that result without retraining.
 
+Training metrics include final-epoch loss, categorical accuracy, and weighted
+F1 for the training split and, when present, the validation split. Evaluation
+metrics include loss, accuracy, macro and weighted F1, macro precision and
+recall, plus per-activity scores and a confusion matrix.
+
 Weight aggregation randomly assigns `session_id` and `client_id` values.
 Model-training persists that assignment and rejects `/train` messages from
 another session or client until the matching `/session/end` arrives. Training

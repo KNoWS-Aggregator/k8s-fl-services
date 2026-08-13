@@ -17,8 +17,8 @@ containers run in the same Pod and mount the same persistent volume at
 `/app/data`. One central weight-aggregation service coordinates all deployed
 training clients and uses its own volume.
 
-Semantic FnO, endpoint, composition, dataset, and distribution descriptions
-are under [`service-descriptions/`](service-descriptions/README.md). Container
+Current aggregator profiles and deployment functions are under
+[`service-descriptions/`](service-descriptions/README.md). Container
 implementation details are under `images/`.
 
 ## Repository structure
@@ -53,9 +53,9 @@ Images are published to the KNoWS-Aggregator organization:
 
 | Image package | Registry image |
 | --- | --- |
-| `data-preparation` | `ghcr.io/knows-aggregator/data-preparation` |
-| `model-training` | `ghcr.io/knows-aggregator/model-training` |
-| `weight-aggregation` | `ghcr.io/knows-aggregator/weight-aggregation` |
+| `data-preparation` | `ghcr.io/knows-aggregator/k8s-fl-services/data-preparation` |
+| `model-training` | `ghcr.io/knows-aggregator/k8s-fl-services/model-training` |
+| `weight-aggregation` | `ghcr.io/knows-aggregator/k8s-fl-services/weight-aggregation` |
 
 The separate data-preparation and model-training images do not imply separate
 aggregator services. They are implementation components of the single
@@ -137,5 +137,5 @@ proxy.
 
 Add an image package under `images/<name>/`, then add its name to `IMAGES` in
 the Makefile. Adding an image does not automatically create a logical service;
-add or update a service profile and deployment function under
+add or update the service's `profile.yaml` and `deployment-function.yaml` under
 `service-descriptions/` separately.

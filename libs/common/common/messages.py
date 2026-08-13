@@ -55,6 +55,12 @@ class TrainingInitMessage(BaseModel):
 class TrainingMetrics(BaseModel):
     num_examples: int = Field(gt=0)
     train_loss: Optional[float] = None
+    train_accuracy: Optional[float] = None
+    train_f1_weighted: Optional[float] = None
+    val_loss: Optional[float] = None
+    val_accuracy: Optional[float] = None
+    val_f1_weighted: Optional[float] = None
+    # Kept during rolling upgrades; new code should use train_accuracy.
     train_acc: Optional[float] = None
 
 
@@ -102,6 +108,12 @@ class EvaluationMetrics(BaseModel):
     num_examples: int = Field(gt=0)
     eval_loss: Optional[float] = None
     eval_accuracy: Optional[float] = None
+    eval_f1_macro: Optional[float] = None
+    eval_f1_weighted: Optional[float] = None
+    eval_precision_macro: Optional[float] = None
+    eval_recall_macro: Optional[float] = None
+    confusion_matrix: Optional[list[list[int]]] = None
+    per_class: Optional[dict[str, dict[str, float | int]]] = None
 
 
 class EvaluationResultMessage(BaseModel):

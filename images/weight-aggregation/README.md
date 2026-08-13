@@ -18,6 +18,11 @@ Immediately before the next training round, departed clients are released and
 new clients are initialized. The client set expected by an in-progress round
 therefore never changes.
 
+`POST /refresh-clients` immediately queries the case slice and returns the
+training-service URLs added to and removed from the registry. This updates
+discovery immediately, while the same between-round membership rule still
+applies to an active session.
+
 Each session assigns a fresh random client ID to every discovered training
 service. Clients whose model signature differs from the canonical model are
 excluded.
@@ -49,7 +54,7 @@ Content-Type: application/json
 The coordinator sets `training_config.num_rounds` from `expected_rounds`, so
 the session endpoint remains the authority for round count.
 
-The callback URL sent to clients is built from `PUBLIC_BASE_URL`, which
+The callback URL sent to clients is built from `AGG_PUBLIC_URL`, which
 defaults to `http://weight-aggregation:8080`.
 
 ## Initial and subsequent weights
@@ -79,9 +84,11 @@ reported number of examples.
 ## Endpoints
 
 - `POST /session/start`
+- `POST /refresh-clients`
 - `POST /training-results`
 - `POST /evaluation-results`
 - `GET /status`
+- `GET /weights`
 - `GET /evaluation-metrics`
 - `GET /healthz`
 - `GET /readyz`
@@ -102,15 +109,21 @@ dataset.
 
 After every successful weight aggregation, the coordinator dispatches the
 aggregated weights to the remaining clients for evaluation. It waits for the
-evaluation quorum, combines loss and accuracy using each client's evaluated
-example count, and persists both per-client and aggregated metrics. Only then
-does it start the next training round or complete the session.
+evaluation quorum, combines loss using each client's evaluated example count,
+and sums client confusion matrices. Global accuracy, macro and weighted F1,
+macro precision and recall, and per-class scores are derived from that summed
+matrix. Both per-client and aggregated metrics are persisted. Only then does it
+start the next training round or complete the session.
 
 The most recent aggregate is available from `GET /evaluation-metrics` and at:
 
 ```text
 /app/data/weight-aggregation/evaluation-metrics.json
 ```
+
+The latest global model from a successfully completed session is downloadable
+from `GET /weights`. Before the first successful session this endpoint returns
+`404`; in-progress round weights are never exposed.
 
 ## Container
 

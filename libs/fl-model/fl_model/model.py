@@ -113,7 +113,10 @@ def load_model(params: dict = HYPER_PARAMETERS, architecture: dict = ARCHITECTUR
     model = keras.models.Model(inputs=model_input, outputs=mo)
 
     if not only_inference:
-        metrics = [keras.metrics.F1Score(name="f1_score", average="weighted")]
+        metrics = [
+            keras.metrics.CategoricalAccuracy(name="accuracy"),
+            keras.metrics.F1Score(name="f1_weighted", average="weighted"),
+        ]
         if optimizer.lower() == "adam":
             opt = keras.optimizers.Adam(learning_rate=lr)
         elif optimizer.lower() == "sgd":

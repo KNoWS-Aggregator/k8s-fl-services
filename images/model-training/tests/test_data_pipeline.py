@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -8,8 +9,24 @@ from model_training.data_pipeline import (
     ACTIVITIES,
     WINDOW_SAMPLES,
     _load_or_create_assignments,
+    _align_labels,
     load_shared_dataset,
 )
+
+
+def test_align_labels_normalizes_timestamp_units():
+    window_times = np.array(["2026-01-01T00:00:00.500000000"], dtype="datetime64[ns]")
+    gt = pd.DataFrame(
+        {"GT": ["Walking"]},
+        index=pd.DatetimeIndex(
+            np.array(["2026-01-01T00:00:00.500000"], dtype="datetime64[us]"),
+            name="event_time",
+        ),
+    )
+
+    labels = _align_labels(window_times, gt)
+
+    assert labels.tolist() == ["Walking"]
 
 
 def test_shared_parquet_is_windowed_per_participant(monkeypatch, tmp_path):

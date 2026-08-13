@@ -15,6 +15,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from common.http_client import request as send_request
@@ -40,6 +41,20 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(threadName)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class _HealthCheckAccessFilter(logging.Filter):
+    """Drop successful probe requests from Uvicorn's access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path, status_code = str(args[2]).partition("?")[0], args[4]
+        return path not in {"/healthz", "/readyz"} or int(status_code) >= 400
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckAccessFilter())
 
 TRAIN_PATH = "/train"
 CLIENT_SESSION_START_PATH = "/session/start"
@@ -107,12 +122,12 @@ def _session_dir(session_id: str) -> Path:
 
 
 def _callback_url() -> str:
-    base = os.getenv("PUBLIC_BASE_URL", "http://weight-aggregation:8080").rstrip("/")
+    base = os.getenv("AGG_PUBLIC_URL", "http://weight-aggregation:8080").rstrip("/")
     return f"{base}{RESULT_PATH}"
 
 
 def _evaluation_callback_url() -> str:
-    base = os.getenv("PUBLIC_BASE_URL", "http://weight-aggregation:8080").rstrip("/")
+    base = os.getenv("AGG_PUBLIC_URL", "http://weight-aggregation:8080").rstrip("/")
     return f"{base}{EVALUATION_RESULT_PATH}"
 
 
@@ -126,7 +141,7 @@ def _client_registry() -> ClientRegistry:
     return _registry
 
 
-def _refresh_clients() -> None:
+def _refresh_clients() -> dict[str, list[str]]:
     changes = _client_registry().refresh()
     if changes["added"] or changes["removed"]:
         logger.info(
@@ -134,6 +149,7 @@ def _refresh_clients() -> None:
             len(changes["added"]),
             len(changes["removed"]),
         )
+    return changes
 
 
 def _is_trainable(base_url: str, own_session_id: str | None) -> bool:
@@ -986,6 +1002,28 @@ def session_status() -> dict[str, Any]:
         }
     )
     return result
+
+
+@app.post("/refresh-clients")
+def refresh_clients() -> dict[str, list[str]]:
+    """Immediately refresh the client registry from the configured case slice."""
+    return _refresh_clients()
+
+
+@app.get("/weights", response_class=FileResponse)
+def global_weights() -> FileResponse:
+    """Download the latest global model from a successfully completed session."""
+    path = _global_weights_path()
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No completed global weights are available",
+        )
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename="global-weights.npz",
+    )
 
 
 @app.get("/evaluation-metrics")

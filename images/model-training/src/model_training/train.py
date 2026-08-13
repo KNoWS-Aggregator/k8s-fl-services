@@ -4,6 +4,9 @@ import os
 import warnings
 from pathlib import Path
 
+import numpy as np
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
+
 from common.messages import (
     EvaluationInitMessage,
     EvaluationMetrics,
@@ -16,6 +19,7 @@ from common.messages import (
 from common.weight_io import bytes_to_weights, weights_to_bytes
 
 from fl_model import load_model
+from .data_pipeline import ACTIVITIES
 from .support import get_save_name, save_training_history, load_data, get_class_weights
 
 with warnings.catch_warnings():
@@ -54,9 +58,11 @@ def run_training(
         verbose=cfg.verbose,
     )
 
-    train_loss = history.history.get("loss", [None])[-1]
-    train_acc = history.history.get("accuracy")
-    train_acc = train_acc[-1] if train_acc else None
+    def final_history_value(name: str) -> float | None:
+        values = history.history.get(name)
+        return float(values[-1]) if values else None
+
+    train_accuracy = final_history_value("accuracy")
 
     save_training_history(
         n_round=msg.round_id,
@@ -69,7 +75,16 @@ def run_training(
         session_id=msg.session_id,
         round_id=msg.round_id,
         client_id=msg.client_id,
-        metrics=TrainingMetrics(num_examples=len(X_train), train_loss=train_loss, train_acc=train_acc),
+        metrics=TrainingMetrics(
+            num_examples=len(X_train),
+            train_loss=final_history_value("loss"),
+            train_accuracy=train_accuracy,
+            train_f1_weighted=final_history_value("f1_weighted"),
+            val_loss=final_history_value("val_loss"),
+            val_accuracy=final_history_value("val_accuracy"),
+            val_f1_weighted=final_history_value("val_f1_weighted"),
+            train_acc=train_accuracy,
+        ),
     )
     local_weights = weights_to_bytes(model.get_weights())
 
@@ -103,7 +118,36 @@ def run_evaluation(
         return_dict=True,
     )
     loss = results.get("loss")
-    accuracy = results.get("accuracy")
+    probabilities = model.predict(
+        test.inputs,
+        batch_size=config.batch_size,
+        verbose=config.verbose,
+    )
+    truth = np.argmax(test.labels, axis=1)
+    predictions = np.argmax(probabilities, axis=1)
+    labels = np.arange(len(ACTIVITIES))
+    matrix = confusion_matrix(truth, predictions, labels=labels)
+    precision, recall, f1, support = precision_recall_fscore_support(
+        truth,
+        predictions,
+        labels=labels,
+        zero_division=0,
+    )
+    total = int(matrix.sum())
+    accuracy = float(np.trace(matrix) / total) if total else None
+    macro_precision = float(np.mean(precision))
+    macro_recall = float(np.mean(recall))
+    macro_f1 = float(np.mean(f1))
+    weighted_f1 = float(np.average(f1, weights=support)) if support.sum() else None
+    per_class = {
+        activity: {
+            "precision": float(precision[index]),
+            "recall": float(recall[index]),
+            "f1": float(f1[index]),
+            "support": int(support[index]),
+        }
+        for index, activity in enumerate(ACTIVITIES)
+    }
     result = EvaluationResultMessage(
         session_id=msg.session_id,
         round_id=msg.round_id,
@@ -111,10 +155,16 @@ def run_evaluation(
         metrics=EvaluationMetrics(
             num_examples=test.num_examples,
             eval_loss=float(loss) if loss is not None else None,
-            eval_accuracy=float(accuracy) if accuracy is not None else None,
+            eval_accuracy=accuracy,
+            eval_f1_macro=macro_f1,
+            eval_f1_weighted=weighted_f1,
+            eval_precision_macro=macro_precision,
+            eval_recall_macro=macro_recall,
+            confusion_matrix=matrix.astype(int).tolist(),
+            per_class=per_class,
         ),
     )
-    del results, datasets, test, model
+    del results, probabilities, datasets, test, model
     keras.backend.clear_session()
     gc.collect()
     return result

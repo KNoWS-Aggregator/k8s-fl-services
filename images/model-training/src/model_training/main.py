@@ -37,6 +37,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class _HealthCheckAccessFilter(logging.Filter):
+    """Drop successful probe requests from Uvicorn's access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path, status_code = str(args[2]).partition("?")[0], args[4]
+        return path not in {"/healthz", "/readyz"} or int(status_code) >= 400
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckAccessFilter())
+
 app = FastAPI(title="Federated model training", version="0.1.0")
 _run_lock = threading.Lock()
 _state_lock = threading.Lock()
@@ -477,9 +491,11 @@ def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> 
             logger.exception("Could not report failure for round %d", msg.round_id)
     else:
         logger.info(
-            "Training round %d completed (examples=%d, loss=%s, accuracy=%s)",
+            "Training round %d completed (examples=%d, loss=%s, accuracy=%s, weighted_f1=%s, val_loss=%s, val_accuracy=%s, val_weighted_f1=%s)",
             msg.round_id, result.metrics.num_examples,
-            result.metrics.train_loss, result.metrics.train_acc,
+            result.metrics.train_loss, result.metrics.train_accuracy,
+            result.metrics.train_f1_weighted, result.metrics.val_loss,
+            result.metrics.val_accuracy, result.metrics.val_f1_weighted,
         )
         _cache_result(result, local_weights)
         _write_status(
@@ -560,9 +576,11 @@ def _run_evaluation_and_report(
             logger.exception("Could not report evaluation failure for round %d", msg.round_id)
     else:
         logger.info(
-            "Evaluation round %d completed (examples=%d, loss=%s, accuracy=%s)",
+            "Evaluation round %d completed (examples=%d, loss=%s, accuracy=%s, macro_f1=%s, weighted_f1=%s, macro_precision=%s, macro_recall=%s)",
             msg.round_id, result.metrics.num_examples,
             result.metrics.eval_loss, result.metrics.eval_accuracy,
+            result.metrics.eval_f1_macro, result.metrics.eval_f1_weighted,
+            result.metrics.eval_precision_macro, result.metrics.eval_recall_macro,
         )
         _cache_evaluation(result)
         try:

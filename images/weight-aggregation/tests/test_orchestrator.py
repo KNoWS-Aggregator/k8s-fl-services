@@ -1,4 +1,4 @@
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 import numpy as np
 import pytest
 from unittest.mock import Mock
@@ -25,6 +25,25 @@ class FakeRegistry:
 def _run_tasks(tasks):
     for task in tasks.tasks:
         task.func(*task.args, **task.kwargs)
+
+
+def test_global_weights_download_serves_only_promoted_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+    with pytest.raises(HTTPException) as missing:
+        main.global_weights()
+    assert missing.value.status_code == 404
+
+    payload = weights_to_bytes([np.array([1.0, 2.0])])
+    path = main._global_weights_path()
+    path.parent.mkdir(parents=True)
+    path.write_bytes(payload)
+
+    response = main.global_weights()
+
+    assert response.path == path
+    assert response.media_type == "application/octet-stream"
+    assert response.headers["content-disposition"] == 'attachment; filename="global-weights.npz"'
 
 
 def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, tmp_path):
@@ -93,7 +112,9 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
             local,
         )
 
-    for loss, accuracy, client_id in zip((0.8, 0.4), (0.2, 0.8), client_ids):
+    matrices = ([[1, 0], [0, 0]], [[0, 0], [1, 0]])
+    per_class = {"Walking": {}, "Sitting": {}}
+    for loss, accuracy, matrix, client_id in zip((0.8, 0.4), (0.2, 0.8), matrices, client_ids):
         main._record_evaluation_result(
             EvaluationResultMessage(
                 session_id=session.session_id,
@@ -103,6 +124,8 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
                     num_examples=1,
                     eval_loss=loss,
                     eval_accuracy=accuracy,
+                    confusion_matrix=matrix,
+                    per_class=per_class,
                 ),
             )
         )
@@ -114,6 +137,9 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
     assert evaluation["metrics"]["num_examples"] == 2
     assert evaluation["metrics"]["eval_loss"] == pytest.approx(0.6)
     assert evaluation["metrics"]["eval_accuracy"] == 0.5
+    assert evaluation["metrics"]["confusion_matrix"] == [[1, 0], [1, 0]]
+    assert evaluation["metrics"]["eval_f1_macro"] == pytest.approx(1 / 3)
+    assert evaluation["metrics"]["eval_recall_macro"] == 0.5
     payload, persisted_signature, source = load_persisted_weights()
     assert payload == main._global_weights_path().read_bytes()
     assert persisted_signature == signature
@@ -262,3 +288,15 @@ def test_status_reports_registered_and_trainable_client_counts(monkeypatch, tmp_
     assert payload["status"] == "idle"
     assert payload["registered_clients"] == 3
     assert payload["trainable_clients"] == 1
+
+
+def test_refresh_clients_immediately_refreshes_registry(monkeypatch):
+    changes = {
+        "added": ["http://training-new"],
+        "removed": ["http://training-old"],
+    }
+    refresh = Mock(return_value=changes)
+    monkeypatch.setattr(main, "_registry", Mock(refresh=refresh))
+
+    assert main.refresh_clients() == changes
+    refresh.assert_called_once_with()

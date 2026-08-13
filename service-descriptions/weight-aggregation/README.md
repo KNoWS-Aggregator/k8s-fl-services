@@ -4,7 +4,8 @@ One central instance coordinates the deployed federated-training-client
 services. At deployment it receives the researcher case-slice URL. That slice
 exposes the participating training-service base URLs through
 `trainingServices`; membership is polled and changes are applied between
-rounds.
+rounds. Researchers can also trigger discovery immediately through
+`POST /refresh-clients`.
 
 Its status endpoint reports the total number of registered training services
 and how many are currently trainable. A service is trainable when it has a
@@ -23,4 +24,18 @@ It:
 
 It has its own persistent volume and never mounts a hospital client's shared
 volume. Aggregated evaluation metrics are exposed as a dataset with a JSON
-distribution; global and intermediate weights remain private state.
+distribution. The final global weights from the latest successfully completed
+session are exposed as a researcher-only download; intermediate weights remain
+private state.
+
+The current aggregator configuration is in `profile.yaml` and
+`deployment-function.yaml`. For example:
+
+```sh
+agg create-service \
+  --name coordinator \
+  --deployment-function weight-aggregation \
+  --param caseSlice=https://researcher.example/slices/case-example \
+  --param pollEnabled=true \
+  --param pollInterval=@hourly
+```

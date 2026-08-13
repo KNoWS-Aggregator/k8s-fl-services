@@ -18,7 +18,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: data-preparation
-          image: ghcr.io/knows-aggregator/data-preparation:latest
+          image: ghcr.io/knows-aggregator/k8s-fl-services/data-preparation:latest
           ports:
             - name: preparation
               containerPort: 8080
@@ -27,25 +27,49 @@ spec:
               value: "REPLACE_WITH_CASE_SLICE_URL"
             - name: DATASET
               value: "accellero"
-            - name: EGRESS_UMA_URL
-              value: "REPLACE_WITH_EGRESS_UMA_URL"
+            - name: POLL_ENABLED
+              value: "true"
+            - name: POLL_INTERVAL
+              value: "@hourly"
             - name: DATA_DIR
               value: /app/data
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: preparation
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: preparation
+            initialDelaySeconds: 10
+            periodSeconds: 30
           volumeMounts:
             - name: data
               mountPath: /app/data
         - name: model-training
-          image: ghcr.io/knows-aggregator/model-training:latest
+          image: ghcr.io/knows-aggregator/k8s-fl-services/model-training:latest
           ports:
             - name: training
               containerPort: 8081
           env:
             - name: PORT
               value: "8081"
-            - name: EGRESS_UMA_URL
-              value: "REPLACE_WITH_EGRESS_UMA_URL"
             - name: DATA_DIR
               value: /app/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: training
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: training
+            initialDelaySeconds: 10
+            periodSeconds: 30
           volumeMounts:
             - name: data
               mountPath: /app/data

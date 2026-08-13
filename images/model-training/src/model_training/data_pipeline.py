@@ -304,6 +304,12 @@ def _align_labels(window_times: np.ndarray, gt: pd.DataFrame) -> np.ndarray:
         return np.full(len(window_times), None, dtype=object)
     windows = pd.DataFrame({"event_time": pd.to_datetime(window_times)}).sort_values("event_time")
     labels = gt.dropna(subset=["GT"]).reset_index().sort_values("event_time")
+    # Parquet/Arrow commonly yields datetime64[us], while rolling-window
+    # timestamps are explicitly datetime64[ns]. pandas.merge_asof requires the
+    # join keys to have exactly the same dtype, even though both represent the
+    # same (timezone-naive) timestamps.
+    windows["event_time"] = windows["event_time"].astype("datetime64[ns]")
+    labels["event_time"] = labels["event_time"].astype("datetime64[ns]")
     aligned = pd.merge_asof(
         windows,
         labels,

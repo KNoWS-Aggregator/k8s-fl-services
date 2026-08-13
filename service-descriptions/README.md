@@ -1,113 +1,55 @@
-# Logical service descriptions
+# Aggregator service configuration
 
-This directory describes aggregator services, not container images.
+This directory contains the current aggregator configuration for the two
+logical federated-learning services:
 
-There are currently two logical services:
+- `federated-training-client/profile.yaml` and `deployment-function.yaml`;
+- `weight-aggregation/profile.yaml` and `deployment-function.yaml`.
 
-- [`federated-training-client/`](federated-training-client/) combines the
-  data-preparation and model-training images in one service profile.
-- [`weight-aggregation/`](weight-aggregation/) describes the central
-  coordinator.
+Profiles describe public operations, roles, functions, and datasets.
+Deployment functions bind those profile routes and deployment inputs to the
+containers, ports, environment variables, storage, and Kubernetes workloads.
+The files use the same `profiles:` and `deploymentFunctions:` format as the
+aggregator platform configuration.
 
-Each service directory contains:
+The older TTL files and `service-definition.yaml` are retained as legacy
+semantic-design references. They are not examples of the current aggregator
+configuration format.
 
-- `functions.ttl`: the deployment function and the runtime FnO functions,
-  parameters, and outputs;
-- `service-definition.ttl`: the reusable `aggr:ServiceProfile`, endpoints,
-  and abstract compositions;
-- `service-request.example.ttl`: deployment-function inputs; and
-- `service.example.ttl`: an example service produced by the deployment
-  function.
+## Federated training client
 
-[`service-definition-vocabulary.ttl`](service-definition-vocabulary.ttl)
-declares the shared extension terms.
+One client is implemented by `data-preparation` and `model-training` containers
+sharing `/app/data`. Its deployment inputs are:
 
-The example IRIs use `https://example.org/k8s-fl-services/`. A real platform
-must replace them with stable, dereferenceable identifiers.
+| Parameter | Container variable | Example |
+| --- | --- | --- |
+| `caseSlice` | `SOURCES` | `https://hospital.example/slices/case-example` |
+| `datasetId` | `DATASET` | `accellero` |
+| `pollEnabled` | `POLL_ENABLED` | `true` |
+| `pollInterval` | `POLL_INTERVAL` | `@hourly` |
 
-## Service and image boundaries
+The public `/status` route is the model-training status used by the coordinator.
+The public `/preparation/status` route is bound to the data-preparation
+container's internal `/status` endpoint. They are deliberately separate because
+both containers implement `/status` on different Pod ports.
 
-The federated-training-client is one semantic service implemented by two
-containers:
+With the aggregator CLI, inspect both independently:
 
-```text
-aggr:Service federated-training-client
-├── data-preparation image
-├── model-training image
-└── shared /app/data volume
+```sh
+agg list-endpoints --svc hospital-client
+agg get-endpoint status --svc hospital-client
+agg get-endpoint preparation/status --svc hospital-client
 ```
 
-Container ports, volume mounts, and process health probes are orchestration
-details. Functions, API operations, data flow, datasets, and distributions
-belong to the service profile.
+## Weight aggregation
 
-## Deployment
+The coordinator deployment inputs are:
 
-Deployment and runtime behavior are distinct FnO functions. Each deployment
-function declares the values a platform must receive in an
-`aggr:ServiceRequest`. Its output has `fno:type aggr:Service`, and the output
-parameter links to the service profile with `dct:conformsTo`.
+| Parameter | Container variable | Example |
+| --- | --- | --- |
+| `caseSlice` | `CASE_SLICE` | `https://researcher.example/slices/case-example` |
+| `pollEnabled` | `POLL_ENABLED` | `true` |
+| `pollInterval` | `POLL_INTERVAL` | `@hourly` |
 
-A request selects the function with `aggr:deploymentFunction` and supplies
-inputs directly with the predicates declared by its `fno:Parameter` values:
-
-```text
-ServiceRequest
-  -> aggr:deploymentFunction
-  -> deployment Function
-       -> fno:expects -> deployment Parameters
-       -> fno:returns -> Output
-                          -> fno:type aggr:Service
-                          -> dct:conformsTo ServiceProfile
-```
-
-The resulting service records the same `aggr:deploymentFunction`.
-
-## Discovery
-
-A deployed service's profile is discovered through its deployment function's
-output. Runtime operations and functions are then discovered through:
-
-```text
-Service
-  -> aggr:deploymentFunction
-  -> Function
-  -> fno:returns
-  -> Output
-  -> dct:conformsTo
-  -> ServiceProfile
-  -> aggr:supportsEndpoint
-  -> Endpoint
-  -> hydra:supportedOperation
-  -> Operation
-  -> aggr:executes
-  -> Function
-```
-
-`aggr:path` is relative to the deployed service's `dcat:endpointURL`.
-
-## Abstract data flow
-
-`aggr:composition` links a service profile to its FnO composition. The
-federated-training-client declares:
-
-```text
-prepare.preparedData
-          -> train.preparedData
-
-train.evaluationData
-          -> evaluate.evaluationData
-```
-
-The composition is independent of the shared-volume implementation.
-
-## Datasets and distributions
-
-An FnO output does not automatically require public access:
-
-- `dcat:servesDataset` makes the logical dataset discoverable;
-- `dcat:distribution` is added only when an access or download representation
-  exists.
-
-The internal evaluation dataset is described without a distribution. Prepared
-data, weights, training metrics, and evaluation metrics have distributions.
+Runtime values such as round count, minimum clients, timeout, and training
+configuration are supplied to `/session/start`; they are not deployment inputs.

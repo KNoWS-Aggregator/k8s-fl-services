@@ -22,6 +22,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class _HealthCheckAccessFilter(logging.Filter):
+    """Drop successful probe requests from Uvicorn's access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path, status_code = str(args[2]).partition("?")[0], args[4]
+        return path not in {"/healthz", "/readyz"} or int(status_code) >= 400
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckAccessFilter())
+
 _lock = threading.Lock()
 _state: dict[str, Any] = {"status": "idle", "started_at": None, "finished_at": None}
 _stop_polling = threading.Event()
