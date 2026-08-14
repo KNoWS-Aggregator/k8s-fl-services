@@ -1,57 +1,144 @@
 # Federated training client
 
 One instance is deployed per hospital. It is one logical aggregator service
-implemented by two containers:
+implemented by `data-preparation` and `model-training` containers sharing a
+persistent volume at `/app/data`.
+
+Data preparation converts the hospital case slice into aggregated Parquet
+data. Model training consumes the latest valid generation, trains local
+weights, and evaluates global weights. The public `/preparation/status` route
+targets the preparation container; all other operations target model training.
+
+The examples use this deployed service URL:
 
 ```text
-federated-training-client
-├── data-preparation
-├── model-training
-└── shared persistent volume at /app/data
+https://aggregator.example/research/services/hospital-client
 ```
 
-Data preparation continuously converts the hospital case slice into aggregated
-Parquet data. Model training consumes that prepared generation, trains local
-weights, and evaluates aggregated weights.
+Follow the `dcat:endpointURL`, `dcat:accessURL`, and `dcat:downloadURL` values
+in the deployed service description rather than assuming these example URLs.
+Protected requests require an UMA bearer token with the role shown below.
 
-The service profile performs three runtime functions:
+## Deploy the service
 
-```text
-prepare -> train -> evaluate
+The deployment inputs are:
+
+| Parameter | Container variable | Example |
+| --- | --- | --- |
+| `caseSlice` | `SOURCES` | `https://hospital.example/slices/case-example` |
+| `datasetId` | `DATASET` | `accellero` |
+| `pollEnabled` | `POLL_ENABLED` | `true` |
+| `pollInterval` | `POLL_INTERVAL` | `@hourly` |
+
+Retrieve `/deployments/fl-client-training` first and use the exact IRIs it
+advertises. An example creation request is:
+
+```http
+POST /research/services HTTP/1.1
+Host: aggregator.example
+Authorization: Bearer <access-token>
+Content-Type: text/turtle
+Accept: text/turtle
+
+@prefix aggr: <https://w3id.org/aggregator#> .
+
+<https://aggregator.example/research/services/hospital-client>
+  a aggr:ServiceRequest ;
+  aggr:deploymentFunction
+    <https://aggregator.example/deployments/fl-client-training> ;
+  <https://aggregator.example/deployments/fl-client-training#case-slice>
+    <https://hospital.example/slices/case-example> ;
+  <https://aggregator.example/deployments/fl-client-training#dataset-id>
+    "accellero" ;
+  <https://aggregator.example/deployments/fl-client-training#poll-enabled>
+    true ;
+  <https://aggregator.example/deployments/fl-client-training#poll-interval>
+    "@hourly" .
 ```
 
-Deployment receives the hospital case-slice URL, participant dataset ID, and
-polling configuration. These values are bound to `SOURCES`, `DATASET`,
-`POLL_ENABLED`, and `POLL_INTERVAL` in the data-preparation container.
+Success returns `201 Created`, a `Location` header, and the Turtle service
+description. Kubernetes deployment continues asynchronously.
 
-`aggr:composition` describes the internal prepared-data and evaluation-data
-connections without exposing the persistent-volume paths.
+## Endpoints intended for service users
 
-Prepared data, client weights, training metrics, and evaluation metrics are
-served as datasets with distributions. The internal evaluation dataset is
-described without a distribution.
+The user-facing operation is the preparation status endpoint. It uses the
+`prepared-data-reader` role, which may also read the prepared-data
+distribution described below.
 
-The current aggregator examples are `profile.yaml` and
-`deployment-function.yaml`. The deployment function routes `/results` and
-`/preparation/status` to data preparation on port `preparation`. It routes
-`/status`, session, training, weights, metrics, and evaluation operations to
-model training on port `training`.
-
-`/status` therefore reports model-training/client readiness, while
-`/preparation/status` exposes detailed progress from the preparation process.
-
-Example deployment with the current aggregator CLI:
-
-```sh
-agg create-service \
-  --name hospital-client \
-  --deployment-function fl-client-training \
-  --param caseSlice=https://hospital.example/slices/case-example \
-  --param datasetId=accellero \
-  --param pollEnabled=true \
-  --param pollInterval=@hourly
+```http
+GET /research/services/hospital-client/preparation/status HTTP/1.1
+Host: aggregator.example
+Authorization: Bearer <prepared-data-reader-token>
+Accept: application/json
 ```
 
-After deployment, `agg get-endpoint preparation/status --svc hospital-client`
-retrieves the preparation status through the service's authenticated public
-route.
+It reports `idle`, `running`, `succeeded`, or `failed`, timestamps, polling
+information, and a public preparation result or error when available.
+
+## Endpoints managed by weight aggregation
+
+The following endpoints are part of the federated protocol and require the
+`coordinator` role. The weight-aggregation service discovers this client and
+calls them automatically. A user normally starts and monitors the federated
+session through the weight-aggregation service instead of calling these
+endpoints directly.
+
+| Method and path | Purpose |
+| --- | --- |
+| `POST /session/start` | Assign this client to the coordinator's session and exchange its model signature. |
+| `POST /session/end` | Release that session assignment. |
+| `POST /train` | Supply global weights and start one local training round. |
+| `POST /evaluate` | Supply aggregated weights for local evaluation. |
+| `GET /status` | Let the coordinator determine preparation validity, assignment, and trainability. |
+
+Training and evaluation results are sent asynchronously to the coordinator's
+`/training-results` and `/evaluation-results` endpoints. These protocol routes
+are documented here so users can distinguish them from the endpoints they are
+expected to call, not as a manual integration interface.
+
+## Outputs and distributions
+
+Outputs are persisted datasets, distinct from operational endpoints.
+
+| Dataset/distribution | Role | URL property | Media type | Availability |
+| --- | --- | --- | --- | --- |
+| `prepared-data/zip` | `prepared-data-reader` | `dcat:downloadURL` | `application/zip` | Latest prepared archive; `404` before publication. |
+| `client-weights/binary` | `training-results-reader` | `dcat:downloadURL` | `application/octet-stream` | Latest local `weights.npz`; `404` before a round completes. |
+| `training-metrics/json` | `training-results-reader` | `dcat:accessURL` | `application/json` | Latest local training metrics; `404` before a round completes. |
+| `evaluation-metrics/json` | `training-results-reader` | `dcat:accessURL` | `application/json` | Latest local evaluation result; `404` before evaluation completes. |
+
+Example JSON distribution request:
+
+```http
+GET /research/services/hospital-client/metrics HTTP/1.1
+Host: aggregator.example
+Authorization: Bearer <training-results-reader-token>
+Accept: application/json
+```
+
+```json
+{
+  "session_id": "session-123",
+  "round_id": 1,
+  "client_id": "client-7",
+  "metrics": {
+    "num_examples": 840,
+    "train_loss": 0.31,
+    "train_accuracy": 0.91,
+    "train_f1_weighted": 0.90,
+    "val_loss": 0.39,
+    "val_accuracy": 0.87,
+    "val_f1_weighted": 0.86
+  }
+}
+```
+
+Fetch downloads with `GET`, accept their advertised media type, and save the
+response bytes using the `Content-Disposition` filename. Do not parse ZIP or
+NPZ downloads as JSON.
+
+## Definition files
+
+- [`profile.yaml`](profile.yaml) defines the service interface and datasets.
+- [`deployment-function.yaml`](deployment-function.yaml) binds that interface
+  and the deployment inputs to the two-container workload.
