@@ -1,8 +1,0 @@
-pyproject.toml
-fl_model/__init__.py
-fl_model/model.py
-fl_model.egg-info/PKG-INFO
-fl_model.egg-info/SOURCES.txt
-fl_model.egg-info/dependency_links.txt
-fl_model.egg-info/requires.txt
-fl_model.egg-info/top_level.txt

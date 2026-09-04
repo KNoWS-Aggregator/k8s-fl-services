@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import resource
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -88,6 +90,9 @@ class ActiveSession:
     phase: str = "training"
     evaluation_metrics_by_client: dict = field(default_factory=dict)
     aggregated_evaluation_metrics: dict[str, Any] = field(default_factory=dict)
+    round_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
+    round_started_perf: float = 0.0
+    dispatch_finished_perf: float = 0.0
     timer: threading.Timer | None = None
 
 
@@ -117,6 +122,10 @@ def _global_metadata_path() -> Path:
     return _data_dir() / "global-weights.json"
 
 
+def _round_metrics_path() -> Path:
+    return _data_dir() / "round-metrics.json"
+
+
 def _session_dir(session_id: str) -> Path:
     return _data_dir() / "sessions" / session_id
 
@@ -129,6 +138,10 @@ def _callback_url() -> str:
 def _evaluation_callback_url() -> str:
     base = os.getenv("AGG_PUBLIC_URL", "http://weight-aggregation:8080").rstrip("/")
     return f"{base}{EVALUATION_RESULT_PATH}"
+
+
+def _peak_ram_bytes() -> int:
+    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
 
 
 def _client_registry() -> ClientRegistry:
@@ -276,6 +289,7 @@ def _persist_session(session: ActiveSession, state: str) -> None:
             "failed_clients": session.failed_clients,
             "phase": session.phase,
             "aggregated_evaluation_metrics": session.aggregated_evaluation_metrics,
+            "round_metrics": session.round_metrics,
             "model_signature": session.model_signature,
             "updated_at": _now(),
         },
@@ -492,6 +506,15 @@ def _start_round(session: ActiveSession) -> None:
         session.evaluation_metrics_by_client = {}
         session.aggregated_evaluation_metrics = {}
         session.phase = "training"
+        session.round_metrics[str(session.current_round)] = {
+            "round_id": session.current_round,
+            "client_training": {},
+            "server": {
+                "peak_ram_bytes": _peak_ram_bytes(),
+                "aggregation_seconds": 0.0,
+            },
+        }
+        session.round_started_perf = time.perf_counter()
         round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
         round_dir.mkdir(parents=True, exist_ok=True)
         (round_dir / "global-input.npz").write_bytes(session.global_weights)
@@ -512,6 +535,7 @@ def _start_round(session: ActiveSession) -> None:
             session.current_round, session.request.expected_rounds,
             len(session.active_clients), session.session_id,
         )
+    dispatch_started = time.perf_counter()
     failed = dispatch_round(
         session_id=session.session_id,
         round_id=session.current_round,
@@ -522,6 +546,12 @@ def _start_round(session: ActiveSession) -> None:
         global_weights=session.global_weights,
         reply_url=_callback_url(),
     )
+    round_metrics = session.round_metrics[str(session.current_round)]
+    session.dispatch_finished_perf = time.perf_counter()
+    round_metrics["server"]["dispatch_seconds"] = (
+        session.dispatch_finished_perf - dispatch_started
+    )
+    round_metrics["server"]["collection_started_at"] = _now()
     for client_id in failed:
         _record_failure(session.session_id, session.current_round, client_id, "dispatch failed")
     with _coordinator_lock:
@@ -580,6 +610,22 @@ def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
             return
         session.weights_by_client[result.client_id] = weights
         session.metrics_by_client[result.client_id] = result.metrics
+        round_metrics = session.round_metrics.setdefault(
+            str(session.current_round),
+            {
+                "round_id": session.current_round,
+                "client_training": {},
+                "server": {
+                    "peak_ram_bytes": _peak_ram_bytes(),
+                    "aggregation_seconds": 0.0,
+                },
+            },
+        )
+        if not session.round_started_perf:
+            session.round_started_perf = time.perf_counter()
+        if not session.dispatch_finished_perf:
+            session.dispatch_finished_perf = session.round_started_perf
+        round_metrics["client_training"][result.client_id] = result.metrics.model_dump(mode="json")
         logger.info(
             "Received training result from client %s for round %d (%d/%d)",
             result.client_id, result.round_id, len(session.weights_by_client),
@@ -590,6 +636,7 @@ def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
         client_dir.mkdir(parents=True, exist_ok=True)
         (client_dir / "weights.npz").write_bytes(weights)
         _write_json(client_dir / "metrics.json", result.metrics.model_dump(mode="json"))
+        aggregation_started = time.perf_counter()
         try:
             session.current_aggregated_weights = federated_average(
                 session.weights_by_client,
@@ -598,6 +645,10 @@ def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
         except Exception as exc:
             _finish_session(session, False, f"Weight aggregation failed: {exc}")
             return
+        round_metrics["server"]["aggregation_seconds"] += (
+            time.perf_counter() - aggregation_started
+        )
+        round_metrics["server"]["peak_ram_bytes"] = _peak_ram_bytes()
         (round_dir / "aggregate-current.npz").write_bytes(
             session.current_aggregated_weights
         )
@@ -622,6 +673,25 @@ def _advance_if_ready(session: ActiveSession) -> None:
     session.global_weights = session.current_aggregated_weights
     round_dir = _session_dir(session.session_id) / f"round_{session.current_round}"
     (round_dir / "aggregated.npz").write_bytes(session.global_weights)
+    server_metrics = session.round_metrics[str(session.current_round)]["server"]
+    client_totals = [
+        metrics.get("total_seconds")
+        for metrics in session.round_metrics[str(session.current_round)]["client_training"].values()
+        if metrics.get("total_seconds") is not None
+    ]
+    training_round_seconds = time.perf_counter() - session.round_started_perf
+    aggregation_seconds = server_metrics["aggregation_seconds"]
+    server_metrics.update(
+        {
+            "training_round_seconds": training_round_seconds,
+            "result_collection_seconds": time.perf_counter() - session.dispatch_finished_perf,
+            "messaging_overhead_seconds": max(
+                0.0,
+                training_round_seconds - max(client_totals, default=0.0) - aggregation_seconds,
+            ),
+            "peak_ram_bytes": _peak_ram_bytes(),
+        }
+    )
     _start_evaluation(session)
 
 
@@ -758,6 +828,17 @@ def _advance_evaluation_if_ready(session: ActiveSession) -> None:
     _write_json(
         round_dir / "aggregated-evaluation.json",
         session.aggregated_evaluation_metrics,
+    )
+    session.round_metrics[str(session.current_round)]["evaluation_metrics"] = (
+        session.aggregated_evaluation_metrics
+    )
+    _write_json(
+        _round_metrics_path(),
+        {
+            "session_id": session.session_id,
+            "rounds": list(session.round_metrics.values()),
+            "updated_at": _now(),
+        },
     )
     _write_json(
         _data_dir() / "evaluation-metrics.json",
@@ -992,7 +1073,7 @@ def readiness() -> dict[str, str]:
 
 
 @app.get("/status")
-def session_status() -> dict[str, Any]:
+def session_status(include_round_metrics: bool = False) -> dict[str, Any]:
     result = _read_status()
     registered, trainable, _ = _client_counts()
     result.update(
@@ -1001,6 +1082,12 @@ def session_status() -> dict[str, Any]:
             "trainable_clients": trainable,
         }
     )
+    if include_round_metrics:
+        result["round_metrics"] = (
+            json.loads(_round_metrics_path().read_text(encoding="utf-8"))
+            if _round_metrics_path().is_file()
+            else None
+        )
     return result
 
 

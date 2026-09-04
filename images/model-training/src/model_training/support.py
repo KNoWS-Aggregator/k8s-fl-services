@@ -10,6 +10,18 @@ from sklearn.utils import compute_class_weight
 from common.messages import TrainingConfig
 from .data_pipeline import ModelDataset, load_shared_datasets
 
+
+def round_dir(session_id: str, client_id: str, round_id: int) -> Path:
+    return (
+        Path(os.getenv("DATA_DIR", "/app/data"))
+        / "model-training"
+        / "rounds"
+        / session_id
+        / client_id
+        / f"round_{round_id}"
+    )
+
+
 def load_data(config: TrainingConfig) -> dict[str, ModelDataset]:
     """Load participant-level splits and optionally scale from training only."""
     datasets = load_shared_datasets(config.val_size, config.test_size)

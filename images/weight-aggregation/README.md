@@ -121,6 +121,14 @@ The most recent aggregate is available from `GET /evaluation-metrics` and at:
 /app/data/weight-aggregation/evaluation-metrics.json
 ```
 
+Per-round timing and memory metrics are available from
+`GET /status?include_round_metrics=true` and are persisted at
+`/app/data/weight-aggregation/round-metrics.json`.
+Each round contains client setup, training, total duration, and peak RSS,
+plus coordinator dispatch, result collection, messaging-overhead estimate,
+weight aggregation duration, and peak RSS. Durations are seconds and memory
+values are bytes.
+
 The latest global model from a successfully completed session is downloadable
 from `GET /weights`. Before the first successful session this endpoint returns
 `404`; in-progress round weights are never exposed.

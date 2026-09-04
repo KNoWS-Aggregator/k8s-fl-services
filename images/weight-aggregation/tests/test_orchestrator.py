@@ -290,6 +290,19 @@ def test_status_reports_registered_and_trainable_client_counts(monkeypatch, tmp_
     assert payload["trainable_clients"] == 1
 
 
+def test_status_optionally_returns_persisted_round_metrics(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "_client_counts", lambda: (2, 1, set()))
+    payload = {
+        "session_id": "session-1",
+        "rounds": [{"round_id": 1, "server": {"aggregation_seconds": 0.25}}],
+    }
+    main._write_json(main._round_metrics_path(), payload)
+
+    assert "round_metrics" not in main.session_status()
+    assert main.session_status(include_round_metrics=True)["round_metrics"] == payload
+
+
 def test_refresh_clients_immediately_refreshes_registry(monkeypatch):
     changes = {
         "added": ["http://training-new"],

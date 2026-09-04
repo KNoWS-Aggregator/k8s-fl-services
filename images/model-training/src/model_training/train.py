@@ -1,6 +1,9 @@
 """Training logic for the Training Job container."""
 import gc
+import json
 import os
+import resource
+import time
 import warnings
 from pathlib import Path
 
@@ -20,11 +23,47 @@ from common.weight_io import bytes_to_weights, weights_to_bytes
 
 from fl_model import load_model
 from .data_pipeline import ACTIVITIES
-from .support import get_save_name, save_training_history, load_data, get_class_weights
+from .support import (
+    get_class_weights,
+    get_save_name,
+    load_data,
+    round_dir,
+    save_training_history,
+)
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     import keras
+
+
+class TrainingProgressCallback(keras.callbacks.Callback):
+    """Persist epoch metrics and weights while a round is running."""
+
+    def __init__(self, output_dir: Path):
+        super().__init__()
+        self.output_dir = output_dir
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        history_path = self.output_dir / "history.json"
+        history = (
+            json.loads(history_path.read_text(encoding="utf-8"))
+            if history_path.is_file()
+            else []
+        )
+        history.append({name: float(value) for name, value in (logs or {}).items()})
+        temporary_history = self.output_dir / "history.json.tmp"
+        temporary_history.write_text(json.dumps(history), encoding="utf-8")
+        temporary_history.replace(history_path)
+
+        weights = weights_to_bytes(self.model.get_weights())
+        epoch_path = self.output_dir / f"weights_epoch_{epoch + 1:03d}.npz"
+        temporary_epoch = self.output_dir / f"{epoch_path.name}.tmp"
+        temporary_epoch.write_bytes(weights)
+        temporary_epoch.replace(epoch_path)
+        temporary_latest = self.output_dir / "weights.npz.tmp"
+        temporary_latest.write_bytes(weights)
+        temporary_latest.replace(self.output_dir / "weights.npz")
 
 
 def run_training(
@@ -33,6 +72,7 @@ def run_training(
     global_weights: bytes,
 ) -> tuple[TrainingResultMessage, bytes]:
     """Handle TrainingInitMessage, run local training, and return TrainingResultMessage and local weights."""
+    started = time.perf_counter()
     keras.backend.clear_session()
     model = load_model()
     model.set_weights(bytes_to_weights(global_weights))
@@ -48,6 +88,8 @@ def run_training(
 
     class_weights = get_class_weights(y_train) if cfg.balance else None
 
+    setup_seconds = time.perf_counter() - started
+    training_started = time.perf_counter()
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val) if validation.num_examples else None,
@@ -56,7 +98,13 @@ def run_training(
         shuffle=True,
         class_weight=class_weights,
         verbose=cfg.verbose,
+        callbacks=[
+            TrainingProgressCallback(
+                round_dir(msg.session_id, msg.client_id, msg.round_id)
+            )
+        ],
     )
+    training_seconds = time.perf_counter() - training_started
 
     def final_history_value(name: str) -> float | None:
         values = history.history.get(name)
@@ -70,6 +118,7 @@ def run_training(
         history=history.history,
         base_path=Path(os.getenv("RESULTS_DIR", "/app/data/model-training/results")) / save_name,
     )
+    local_weights = weights_to_bytes(model.get_weights())
 
     result = TrainingResultMessage(
         session_id=msg.session_id,
@@ -84,15 +133,17 @@ def run_training(
             val_accuracy=final_history_value("val_accuracy"),
             val_f1_weighted=final_history_value("val_f1_weighted"),
             train_acc=train_accuracy,
+            setup_seconds=setup_seconds,
+            training_seconds=training_seconds,
+            total_seconds=time.perf_counter() - started,
+            peak_ram_bytes=int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024),
         ),
     )
-    local_weights = weights_to_bytes(model.get_weights())
 
     del history, datasets, X_train, y_train, model
     keras.backend.clear_session()
     gc.collect()
     return result, local_weights
-
 
 def run_evaluation(
     msg: EvaluationInitMessage,

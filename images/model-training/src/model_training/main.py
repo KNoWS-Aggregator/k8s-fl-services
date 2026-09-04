@@ -29,6 +29,7 @@ from common.messages import (
     TrainingResultMessage,
 )
 from fl_model import create_initial_weights
+from .support import round_dir
 from .train import run_evaluation, run_training
 
 logging.basicConfig(
@@ -70,17 +71,6 @@ def _status_path() -> Path:
 
 def _session_path() -> Path:
     return _data_dir() / "model-training" / "session.json"
-
-
-def _round_dir(session_id: str, client_id: str, round_id: int) -> Path:
-    return (
-        _data_dir()
-        / "model-training"
-        / "rounds"
-        / session_id
-        / client_id
-        / f"round_{round_id}"
-    )
 
 
 def _read_status() -> dict[str, Any]:
@@ -156,7 +146,7 @@ def _cached_result(
     client_id: str,
     round_id: int,
 ) -> tuple[TrainingResultMessage, bytes] | None:
-    directory = _round_dir(session_id, client_id, round_id)
+    directory = round_dir(session_id, client_id, round_id)
     message_path = directory / "result.json"
     weights_path = directory / "weights.npz"
     if not message_path.is_file() or not weights_path.is_file():
@@ -168,7 +158,7 @@ def _cached_result(
 
 
 def _cache_result(result: TrainingResultMessage, weights: bytes) -> None:
-    directory = _round_dir(result.session_id, result.client_id, result.round_id)
+    directory = round_dir(result.session_id, result.client_id, result.round_id)
     directory.mkdir(parents=True, exist_ok=True)
     weights_temporary = directory / "weights.npz.tmp"
     result_temporary = directory / "result.json.tmp"
@@ -183,18 +173,40 @@ def _cached_evaluation(
     client_id: str,
     round_id: int,
 ) -> EvaluationResultMessage | None:
-    path = _round_dir(session_id, client_id, round_id) / "evaluation.json"
+    path = round_dir(session_id, client_id, round_id) / "evaluation.json"
     if not path.is_file():
         return None
     return EvaluationResultMessage.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def _cache_evaluation(result: EvaluationResultMessage) -> None:
-    directory = _round_dir(result.session_id, result.client_id, result.round_id)
+    directory = round_dir(result.session_id, result.client_id, result.round_id)
     directory.mkdir(parents=True, exist_ok=True)
     temporary = directory / "evaluation.json.tmp"
     temporary.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     temporary.replace(directory / "evaluation.json")
+
+
+def _latest_round_dir() -> Path:
+    current = _read_status()
+    if current.get("status") == "running":
+        directory = round_dir(
+            current["session_id"], current["client_id"], current["round_id"]
+        )
+        if (directory / "weights.npz").is_file():
+            return directory
+    rounds_dir = _data_dir() / "model-training" / "rounds"
+    candidates = [
+        path.parent
+        for path in rounds_dir.glob("*/*/round_*/weights.npz")
+        if path.is_file()
+    ]
+    if not candidates:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No training output is available",
+        )
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
 def _latest_result_paths() -> tuple[Path, Path]:
@@ -213,6 +225,32 @@ def _latest_result_paths() -> tuple[Path, Path]:
             detail="The latest training result has no corresponding weights",
         )
     return result_path, weights_path
+
+
+def _round_history_dirs() -> list[Path]:
+    rounds_dir = _data_dir() / "model-training" / "rounds"
+    paths = []
+    for path in rounds_dir.glob("*/*/round_*"):
+        try:
+            int(path.name.removeprefix("round_"))
+        except ValueError:
+            continue
+        paths.append(path)
+    current = _read_status()
+    if current.get("status") == "running":
+        active_dir = round_dir(
+            current["session_id"], current["client_id"], current["round_id"]
+        )
+        if active_dir not in paths:
+            paths.append(active_dir)
+    return sorted(
+        paths,
+        key=lambda path: (
+            path.parents[1].name,
+            path.parent.name,
+            int(path.name.removeprefix("round_")),
+        ),
+    )
 
 
 def _session_for(msg: TrainingInitMessage) -> ClientSessionStart:
@@ -665,8 +703,12 @@ def training_status() -> dict[str, Any]:
 
 
 @app.get("/weights", response_class=FileResponse)
-def training_weights() -> FileResponse:
-    _, weights_path = _latest_result_paths()
+def training_weights(include_in_progress: bool = False) -> FileResponse:
+    """Return completed weights, or the latest checkpoint when requested."""
+    if include_in_progress:
+        weights_path = _latest_round_dir() / "weights.npz"
+    else:
+        _, weights_path = _latest_result_paths()
     return FileResponse(
         weights_path,
         media_type="application/octet-stream",
@@ -675,17 +717,44 @@ def training_weights() -> FileResponse:
 
 
 @app.get("/metrics")
-def training_metrics() -> dict[str, Any]:
-    result_path, _ = _latest_result_paths()
-    result = TrainingResultMessage.model_validate_json(
-        result_path.read_text(encoding="utf-8")
-    )
-    return {
-        "session_id": result.session_id,
-        "round_id": result.round_id,
-        "client_id": result.client_id,
-        "metrics": result.metrics.model_dump(),
+def training_metrics(include_history: bool = False) -> dict[str, Any]:
+    """Return latest completed metrics and, optionally, per-epoch history."""
+    try:
+        result_path, _ = _latest_result_paths()
+    except HTTPException:
+        if not include_history:
+            raise
+        result = None
+    else:
+        result = TrainingResultMessage.model_validate_json(
+            result_path.read_text(encoding="utf-8")
+        )
+
+    payload = {
+        "session_id": result.session_id if result else None,
+        "round_id": result.round_id if result else None,
+        "client_id": result.client_id if result else None,
+        "metrics": result.metrics.model_dump() if result else None,
     }
+    if include_history:
+        round_dirs = _round_history_dirs()
+        if not round_dirs:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No training metrics or history are available",
+            )
+        payload["rounds"] = [
+            {
+                "session_id": round_dir.parents[1].name,
+                "client_id": round_dir.parent.name,
+                "round_id": int(round_dir.name.removeprefix("round_")),
+                "history": json.loads((round_dir / "history.json").read_text(encoding="utf-8"))
+                if (round_dir / "history.json").is_file()
+                else [],
+            }
+            for round_dir in round_dirs
+        ]
+    return payload
 
 
 @app.get("/evaluation-metrics")

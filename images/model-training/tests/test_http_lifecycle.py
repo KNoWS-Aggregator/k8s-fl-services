@@ -228,6 +228,39 @@ def test_readiness_checks_shared_inputs(monkeypatch, tmp_path):
     assert main.readiness() == {"status": "ready"}
 
 
+def test_metrics_can_include_history_and_weights_can_include_active_round(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    completed = tmp_path / "model-training" / "rounds" / "session-1" / "hospital-a" / "round_1"
+    active = tmp_path / "model-training" / "rounds" / "session-1" / "hospital-a" / "round_2"
+    completed.mkdir(parents=True)
+    active.mkdir(parents=True)
+    (completed / "history.json").write_text(json.dumps([{"loss": 0.5}]), encoding="utf-8")
+    (completed / "weights.npz").write_bytes(b"round-1")
+    (completed / "result.json").write_text(
+        TrainingResultMessage(
+            session_id="session-1",
+            round_id=1,
+            client_id="hospital-a",
+            metrics=TrainingMetrics(num_examples=12),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (active / "history.json").write_text(json.dumps([{"loss": 0.4}]), encoding="utf-8")
+    (active / "weights.npz").write_bytes(b"round-2")
+    main._write_status(
+        {"status": "running", "session_id": "session-1", "client_id": "hospital-a", "round_id": 2}
+    )
+
+    history = main.training_metrics(include_history=True)
+    assert history["round_id"] == 1
+    assert [round_data["round_id"] for round_data in history["rounds"]] == [1, 2]
+    assert history["rounds"][1]["history"] == [{"loss": 0.4}]
+    assert main.training_weights().path == completed / "weights.npz"
+    assert main.training_weights(include_in_progress=True).path == active / "weights.npz"
+
+
 def test_updating_dataset_is_trainable_when_previous_generation_exists(
     monkeypatch, tmp_path
 ):
