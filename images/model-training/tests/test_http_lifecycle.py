@@ -228,6 +228,26 @@ def test_readiness_checks_shared_inputs(monkeypatch, tmp_path):
     assert main.readiness() == {"status": "ready"}
 
 
+def test_history_contains_all_rounds_and_latest_weights_are_live(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    completed = tmp_path / "model-training" / "rounds" / "session-1" / "hospital-a" / "round_1"
+    active = tmp_path / "model-training" / "rounds" / "session-1" / "hospital-a" / "round_2"
+    completed.mkdir(parents=True)
+    active.mkdir(parents=True)
+    (completed / "history.json").write_text(json.dumps([{"loss": 0.5}]), encoding="utf-8")
+    (completed / "weights.npz").write_bytes(b"round-1")
+    (active / "history.json").write_text(json.dumps([{"loss": 0.4}]), encoding="utf-8")
+    (active / "weights.npz").write_bytes(b"round-2")
+    main._write_status(
+        {"status": "running", "session_id": "session-1", "client_id": "hospital-a", "round_id": 2}
+    )
+
+    history = main.training_history()
+    assert [round_data["round_id"] for round_data in history["rounds"]] == [1, 2]
+    assert history["rounds"][1]["history"] == [{"loss": 0.4}]
+    assert main.latest_training_weights().path == active / "weights.npz"
+
+
 def test_updating_dataset_is_trainable_when_previous_generation_exists(
     monkeypatch, tmp_path
 ):

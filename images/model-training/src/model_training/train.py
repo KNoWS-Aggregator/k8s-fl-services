@@ -1,5 +1,6 @@
 """Training logic for the Training Job container."""
 import gc
+import json
 import os
 import warnings
 from pathlib import Path
@@ -20,11 +21,47 @@ from common.weight_io import bytes_to_weights, weights_to_bytes
 
 from fl_model import load_model
 from .data_pipeline import ACTIVITIES
-from .support import get_save_name, save_training_history, load_data, get_class_weights
+from .support import (
+    get_class_weights,
+    get_save_name,
+    load_data,
+    round_dir,
+    save_training_history,
+)
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     import keras
+
+
+class TrainingProgressCallback(keras.callbacks.Callback):
+    """Persist epoch metrics and weights while a round is running."""
+
+    def __init__(self, output_dir: Path):
+        super().__init__()
+        self.output_dir = output_dir
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        history_path = self.output_dir / "history.json"
+        history = (
+            json.loads(history_path.read_text(encoding="utf-8"))
+            if history_path.is_file()
+            else []
+        )
+        history.append({name: float(value) for name, value in (logs or {}).items()})
+        temporary_history = self.output_dir / "history.json.tmp"
+        temporary_history.write_text(json.dumps(history), encoding="utf-8")
+        temporary_history.replace(history_path)
+
+        weights = weights_to_bytes(self.model.get_weights())
+        epoch_path = self.output_dir / f"weights_epoch_{epoch + 1:03d}.npz"
+        temporary_epoch = self.output_dir / f"{epoch_path.name}.tmp"
+        temporary_epoch.write_bytes(weights)
+        temporary_epoch.replace(epoch_path)
+        temporary_latest = self.output_dir / "weights.npz.tmp"
+        temporary_latest.write_bytes(weights)
+        temporary_latest.replace(self.output_dir / "weights.npz")
 
 
 def run_training(
@@ -56,6 +93,11 @@ def run_training(
         shuffle=True,
         class_weight=class_weights,
         verbose=cfg.verbose,
+        callbacks=[
+            TrainingProgressCallback(
+                round_dir(msg.session_id, msg.client_id, msg.round_id)
+            )
+        ],
     )
 
     def final_history_value(name: str) -> float | None:

@@ -106,7 +106,11 @@ make containers-push CONTAINER=model-training TAG=0.1.0
 - `POST /session/start` assigns an idle service to a federated session.
 - `POST /session/end` releases that assignment.
 - `GET /weights` retrieves the weights from the latest completed local round.
+- `GET /weights/latest` retrieves the latest available weights, including from a
+  round that is still training.
 - `GET /metrics` retrieves the metrics from the latest completed local round.
+- `GET /history` retrieves epoch history for every discovered round, including
+  the currently running round.
 - `GET /evaluation-metrics` retrieves client evaluation metrics.
 - `GET /healthz` provides a process liveness check.
 - `GET /readyz` verifies prepared Parquet inputs and shared-volume write access.
