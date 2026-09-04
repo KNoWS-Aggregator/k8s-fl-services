@@ -1073,7 +1073,7 @@ def readiness() -> dict[str, str]:
 
 
 @app.get("/status")
-def session_status() -> dict[str, Any]:
+def session_status(include_round_metrics: bool = False) -> dict[str, Any]:
     result = _read_status()
     registered, trainable, _ = _client_counts()
     result.update(
@@ -1082,6 +1082,12 @@ def session_status() -> dict[str, Any]:
             "trainable_clients": trainable,
         }
     )
+    if include_round_metrics:
+        result["round_metrics"] = (
+            json.loads(_round_metrics_path().read_text(encoding="utf-8"))
+            if _round_metrics_path().is_file()
+            else None
+        )
     return result
 
 
@@ -1105,16 +1111,6 @@ def global_weights() -> FileResponse:
         media_type="application/octet-stream",
         filename="global-weights.npz",
     )
-
-
-@app.get("/round-metrics")
-def round_metrics() -> dict[str, Any]:
-    if not _round_metrics_path().is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No round metrics are available",
-        )
-    return json.loads(_round_metrics_path().read_text(encoding="utf-8"))
 
 
 @app.get("/evaluation-metrics")

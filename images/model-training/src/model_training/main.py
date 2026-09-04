@@ -703,25 +703,12 @@ def training_status() -> dict[str, Any]:
 
 
 @app.get("/weights", response_class=FileResponse)
-def training_weights() -> FileResponse:
-    _, weights_path = _latest_result_paths()
-    return FileResponse(
-        weights_path,
-        media_type="application/octet-stream",
-        filename="weights.npz",
-    )
-
-
-@app.get("/weights/latest", response_class=FileResponse)
-def latest_training_weights() -> FileResponse:
-    """Return the newest checkpoint, including one from a running round."""
-    directory = _latest_round_dir()
-    weights_path = directory / "weights.npz"
-    if not weights_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No training weights are available yet",
-        )
+def training_weights(include_in_progress: bool = False) -> FileResponse:
+    """Return completed weights, or the latest checkpoint when requested."""
+    if include_in_progress:
+        weights_path = _latest_round_dir() / "weights.npz"
+    else:
+        _, weights_path = _latest_result_paths()
     return FileResponse(
         weights_path,
         media_type="application/octet-stream",
@@ -730,29 +717,33 @@ def latest_training_weights() -> FileResponse:
 
 
 @app.get("/metrics")
-def training_metrics() -> dict[str, Any]:
-    result_path, _ = _latest_result_paths()
-    result = TrainingResultMessage.model_validate_json(
-        result_path.read_text(encoding="utf-8")
-    )
-    return {
-        "session_id": result.session_id,
-        "round_id": result.round_id,
-        "client_id": result.client_id,
-        "metrics": result.metrics.model_dump(),
-    }
-
-
-@app.get("/history")
-def training_history() -> dict[str, Any]:
-    round_dirs = _round_history_dirs()
-    if not round_dirs:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No training history is available",
+def training_metrics(include_history: bool = False) -> dict[str, Any]:
+    """Return latest completed metrics and, optionally, per-epoch history."""
+    try:
+        result_path, _ = _latest_result_paths()
+    except HTTPException:
+        if not include_history:
+            raise
+        result = None
+    else:
+        result = TrainingResultMessage.model_validate_json(
+            result_path.read_text(encoding="utf-8")
         )
-    return {
-        "rounds": [
+
+    payload = {
+        "session_id": result.session_id if result else None,
+        "round_id": result.round_id if result else None,
+        "client_id": result.client_id if result else None,
+        "metrics": result.metrics.model_dump() if result else None,
+    }
+    if include_history:
+        round_dirs = _round_history_dirs()
+        if not round_dirs:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No training metrics or history are available",
+            )
+        payload["rounds"] = [
             {
                 "session_id": round_dir.parents[1].name,
                 "client_id": round_dir.parent.name,
@@ -762,8 +753,8 @@ def training_history() -> dict[str, Any]:
                 else [],
             }
             for round_dir in round_dirs
-        ],
-    }
+        ]
+    return payload
 
 
 @app.get("/evaluation-metrics")

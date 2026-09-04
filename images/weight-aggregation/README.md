@@ -89,7 +89,6 @@ reported number of examples.
 - `POST /evaluation-results`
 - `GET /status`
 - `GET /weights`
-- `GET /round-metrics`
 - `GET /evaluation-metrics`
 - `GET /healthz`
 - `GET /readyz`
@@ -122,8 +121,9 @@ The most recent aggregate is available from `GET /evaluation-metrics` and at:
 /app/data/weight-aggregation/evaluation-metrics.json
 ```
 
-Per-round timing and memory metrics are available from `GET /round-metrics`
-and are persisted at `/app/data/weight-aggregation/round-metrics.json`.
+Per-round timing and memory metrics are available from
+`GET /status?include_round_metrics=true` and are persisted at
+`/app/data/weight-aggregation/round-metrics.json`.
 Each round contains client setup, training, total duration, and peak RSS,
 plus coordinator dispatch, result collection, messaging-overhead estimate,
 weight aggregation duration, and peak RSS. Durations are seconds and memory
