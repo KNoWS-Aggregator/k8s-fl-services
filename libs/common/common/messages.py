@@ -62,6 +62,10 @@ class TrainingMetrics(BaseModel):
     val_f1_weighted: Optional[float] = None
     # Kept during rolling upgrades; new code should use train_accuracy.
     train_acc: Optional[float] = None
+    setup_seconds: Optional[float] = Field(default=None, ge=0)
+    training_seconds: Optional[float] = Field(default=None, ge=0)
+    total_seconds: Optional[float] = Field(default=None, ge=0)
+    peak_ram_bytes: Optional[int] = Field(default=None, ge=0)
 
 
 class TrainingResultMessage(BaseModel):

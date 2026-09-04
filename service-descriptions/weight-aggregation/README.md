@@ -71,6 +71,7 @@ service normally call.
 | `POST /session/start` | `researcher` | Start an asynchronous session; return `202` and its generated ID. |
 | `POST /refresh-clients` | `researcher` | Refresh discovery; return added and removed service URLs. |
 | `GET /status` | `researcher` | Return session state plus registered and trainable client counts. |
+| `GET /round-metrics` | `researcher` | Return timing and peak-RAM metrics for every completed round in the latest session. |
 
 ### Start a federated session
 

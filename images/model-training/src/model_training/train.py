@@ -2,6 +2,8 @@
 import gc
 import json
 import os
+import resource
+import time
 import warnings
 from pathlib import Path
 
@@ -70,6 +72,7 @@ def run_training(
     global_weights: bytes,
 ) -> tuple[TrainingResultMessage, bytes]:
     """Handle TrainingInitMessage, run local training, and return TrainingResultMessage and local weights."""
+    started = time.perf_counter()
     keras.backend.clear_session()
     model = load_model()
     model.set_weights(bytes_to_weights(global_weights))
@@ -85,6 +88,8 @@ def run_training(
 
     class_weights = get_class_weights(y_train) if cfg.balance else None
 
+    setup_seconds = time.perf_counter() - started
+    training_started = time.perf_counter()
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val) if validation.num_examples else None,
@@ -99,6 +104,7 @@ def run_training(
             )
         ],
     )
+    training_seconds = time.perf_counter() - training_started
 
     def final_history_value(name: str) -> float | None:
         values = history.history.get(name)
@@ -112,6 +118,7 @@ def run_training(
         history=history.history,
         base_path=Path(os.getenv("RESULTS_DIR", "/app/data/model-training/results")) / save_name,
     )
+    local_weights = weights_to_bytes(model.get_weights())
 
     result = TrainingResultMessage(
         session_id=msg.session_id,
@@ -126,15 +133,17 @@ def run_training(
             val_accuracy=final_history_value("val_accuracy"),
             val_f1_weighted=final_history_value("val_f1_weighted"),
             train_acc=train_accuracy,
+            setup_seconds=setup_seconds,
+            training_seconds=training_seconds,
+            total_seconds=time.perf_counter() - started,
+            peak_ram_bytes=int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024),
         ),
     )
-    local_weights = weights_to_bytes(model.get_weights())
 
     del history, datasets, X_train, y_train, model
     keras.backend.clear_session()
     gc.collect()
     return result, local_weights
-
 
 def run_evaluation(
     msg: EvaluationInitMessage,

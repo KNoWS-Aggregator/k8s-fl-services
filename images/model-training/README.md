@@ -108,7 +108,8 @@ make containers-push CONTAINER=model-training TAG=0.1.0
 - `GET /weights` retrieves the weights from the latest completed local round.
 - `GET /weights/latest` retrieves the latest available weights, including from a
   round that is still training.
-- `GET /metrics` retrieves the metrics from the latest completed local round.
+- `GET /metrics` retrieves the metrics from the latest completed local round,
+  including setup, training, total duration, and peak RAM usage.
 - `GET /history` retrieves epoch history for every discovered round, including
   the currently running round.
 - `GET /evaluation-metrics` retrieves client evaluation metrics.
@@ -129,6 +130,10 @@ Training metrics include final-epoch loss, categorical accuracy, and weighted
 F1 for the training split and, when present, the validation split. Evaluation
 metrics include loss, accuracy, macro and weighted F1, macro precision and
 recall, plus per-activity scores and a confusion matrix.
+Training metrics also include `setup_seconds` (model and data preparation),
+`training_seconds` (the `model.fit` call), `total_seconds`, and
+`peak_ram_bytes`. These are returned by `GET /metrics` and are included in
+the result sent to the aggregation service.
 
 Weight aggregation randomly assigns `session_id` and `client_id` values.
 Model-training persists that assignment and rejects `/train` messages from
