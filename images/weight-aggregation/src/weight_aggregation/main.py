@@ -840,15 +840,6 @@ def _advance_evaluation_if_ready(session: ActiveSession) -> None:
             "updated_at": _now(),
         },
     )
-    _write_json(
-        _data_dir() / "evaluation-metrics.json",
-        {
-            "session_id": session.session_id,
-            "round_id": session.current_round,
-            "metrics": session.aggregated_evaluation_metrics,
-            "updated_at": _now(),
-        },
-    )
     if session.current_round >= session.request.expected_rounds:
         _finish_session(session, True)
     else:
@@ -1073,7 +1064,7 @@ def readiness() -> dict[str, str]:
 
 
 @app.get("/status")
-def session_status(include_round_metrics: bool = False) -> dict[str, Any]:
+def session_status() -> dict[str, Any]:
     result = _read_status()
     registered, trainable, _ = _client_counts()
     result.update(
@@ -1082,13 +1073,57 @@ def session_status(include_round_metrics: bool = False) -> dict[str, Any]:
             "trainable_clients": trainable,
         }
     )
-    if include_round_metrics:
-        result["round_metrics"] = (
-            json.loads(_round_metrics_path().read_text(encoding="utf-8"))
-            if _round_metrics_path().is_file()
-            else None
-        )
     return result
+
+
+def _metrics_history() -> dict[str, Any]:
+    with _coordinator_lock:
+        session = _active
+        if session and session.round_metrics:
+            payload = {
+                "session_id": session.session_id,
+                "rounds": json.loads(json.dumps(list(session.round_metrics.values()))),
+                "updated_at": _now(),
+            }
+        elif _round_metrics_path().is_file():
+            payload = json.loads(_round_metrics_path().read_text(encoding="utf-8"))
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No metrics are available",
+            )
+    return {
+        "session_id": payload["session_id"],
+        "rounds": [
+            {
+                "round_id": round_data["round_id"],
+                "training": round_data.get("client_training", {}),
+                "evaluation": round_data.get("evaluation_metrics"),
+                "server": round_data.get("server", {}),
+            }
+            for round_data in payload.get("rounds", [])
+        ],
+        "updated_at": payload.get("updated_at"),
+    }
+
+
+@app.get("/metrics")
+def metrics() -> dict[str, Any]:
+    """Return training, evaluation, and server metrics for the latest round."""
+    payload = _metrics_history()
+    if not payload["rounds"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No round metrics are available",
+        )
+    latest = max(payload["rounds"], key=lambda value: value["round_id"])
+    return {"session_id": payload["session_id"], **latest}
+
+
+@app.get("/metrics/history")
+def metrics_history() -> dict[str, Any]:
+    """Return training, evaluation, and server metrics for all session rounds."""
+    return _metrics_history()
 
 
 @app.post("/refresh-clients")
@@ -1111,17 +1146,6 @@ def global_weights() -> FileResponse:
         media_type="application/octet-stream",
         filename="global-weights.npz",
     )
-
-
-@app.get("/evaluation-metrics")
-def aggregated_evaluation_metrics() -> dict[str, Any]:
-    path = _data_dir() / "evaluation-metrics.json"
-    if not path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No aggregated evaluation metrics are available",
-        )
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

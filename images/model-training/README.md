@@ -60,9 +60,8 @@ The validation split is passed to `model.fit` during local training to calculate
 validation loss and accuracy after each epoch. It is not used for the separate
 post-aggregation evaluation phase.
 
-Training histories are written under
-`/app/data/model-training/results` by default. `RESULTS_DIR` overrides this
-location.
+Training histories and epoch checkpoints are written into each session's round
+directory under `/app/data/model-training/rounds`.
 
 ## Generation-aware preprocessing cache
 
@@ -105,14 +104,12 @@ make containers-push CONTAINER=model-training TAG=0.1.0
 - `POST /evaluate` evaluates aggregated weights without modifying them.
 - `POST /session/start` assigns an idle service to a federated session.
 - `POST /session/end` releases that assignment.
-- `GET /weights` retrieves the weights from the latest completed local round;
-  `include_in_progress=true` instead retrieves the latest available checkpoint,
-  including from a round that is still training.
-- `GET /metrics` retrieves the metrics from the latest completed local round,
-  including setup, training, total duration, and peak RAM usage. With
-  `include_history=true`, it also retrieves epoch history for every discovered
-  round, including the currently running round.
-- `GET /evaluation-metrics` retrieves client evaluation metrics.
+- `GET /weights` retrieves the latest available local weights, including the
+  newest checkpoint from a round that is still training.
+- `GET /metrics` retrieves local training and evaluation metrics for the latest
+  round. Either section is `null` until that phase completes.
+- `GET /metrics/history` retrieves epoch history for every discovered round,
+  including the currently running round.
 - `GET /healthz` provides a process liveness check.
 - `GET /readyz` verifies prepared Parquet inputs and shared-volume write access.
 - `GET /status` returns the persistent state of the most recent round together

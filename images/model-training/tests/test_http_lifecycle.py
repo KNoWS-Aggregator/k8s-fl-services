@@ -196,9 +196,10 @@ def test_evaluation_is_cached_reported_and_exposed(monkeypatch, tmp_path):
     assert duplicate["status"] == "already_completed"
     _run_tasks(duplicate_tasks)
 
-    exposed = main.evaluation_metrics()
-    assert exposed["metrics"]["num_examples"] == 8
-    assert exposed["metrics"]["eval_accuracy"] == 0.75
+    exposed = main.training_metrics()
+    assert exposed["training"] is None
+    assert exposed["evaluation"]["num_examples"] == 8
+    assert exposed["evaluation"]["eval_accuracy"] == 0.75
     assert calls["evaluate"] == 1
     assert len(calls["reports"]) == 2
 
@@ -228,9 +229,7 @@ def test_readiness_checks_shared_inputs(monkeypatch, tmp_path):
     assert main.readiness() == {"status": "ready"}
 
 
-def test_metrics_can_include_history_and_weights_can_include_active_round(
-    monkeypatch, tmp_path
-):
+def test_history_and_weights_include_active_round(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     completed = tmp_path / "model-training" / "rounds" / "session-1" / "hospital-a" / "round_1"
     active = tmp_path / "model-training" / "rounds" / "session-1" / "hospital-a" / "round_2"
@@ -247,18 +246,33 @@ def test_metrics_can_include_history_and_weights_can_include_active_round(
         ).model_dump_json(),
         encoding="utf-8",
     )
+    training_only = main.training_metrics()
+    assert training_only["training"]["num_examples"] == 12
+    assert training_only["evaluation"] is None
+    (completed / "evaluation.json").write_text(
+        EvaluationResultMessage(
+            session_id="session-1",
+            round_id=1,
+            client_id="hospital-a",
+            metrics=EvaluationMetrics(num_examples=4, eval_accuracy=0.75),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
     (active / "history.json").write_text(json.dumps([{"loss": 0.4}]), encoding="utf-8")
     (active / "weights.npz").write_bytes(b"round-2")
     main._write_status(
         {"status": "running", "session_id": "session-1", "client_id": "hospital-a", "round_id": 2}
     )
 
-    history = main.training_metrics(include_history=True)
-    assert history["round_id"] == 1
+    history = main.training_history()
     assert [round_data["round_id"] for round_data in history["rounds"]] == [1, 2]
     assert history["rounds"][1]["history"] == [{"loss": 0.4}]
-    assert main.training_weights().path == completed / "weights.npz"
-    assert main.training_weights(include_in_progress=True).path == active / "weights.npz"
+    metrics = main.training_metrics()
+    assert metrics["round_id"] == 1
+    assert metrics["training"]["num_examples"] == 12
+    assert metrics["evaluation"]["num_examples"] == 4
+    assert metrics["evaluation"]["eval_accuracy"] == 0.75
+    assert main.training_weights().path == active / "weights.npz"
 
 
 def test_updating_dataset_is_trainable_when_previous_generation_exists(

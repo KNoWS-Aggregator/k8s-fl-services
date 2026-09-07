@@ -133,13 +133,13 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
     assert main._active is None
     promoted = bytes_to_weights(main._global_weights_path().read_bytes())
     assert np.allclose(promoted[0], np.array([3.0]))
-    evaluation = main.aggregated_evaluation_metrics()
-    assert evaluation["metrics"]["num_examples"] == 2
-    assert evaluation["metrics"]["eval_loss"] == pytest.approx(0.6)
-    assert evaluation["metrics"]["eval_accuracy"] == 0.5
-    assert evaluation["metrics"]["confusion_matrix"] == [[1, 0], [1, 0]]
-    assert evaluation["metrics"]["eval_f1_macro"] == pytest.approx(1 / 3)
-    assert evaluation["metrics"]["eval_recall_macro"] == 0.5
+    evaluation = main.metrics()["evaluation"]
+    assert evaluation["num_examples"] == 2
+    assert evaluation["eval_loss"] == pytest.approx(0.6)
+    assert evaluation["eval_accuracy"] == 0.5
+    assert evaluation["confusion_matrix"] == [[1, 0], [1, 0]]
+    assert evaluation["eval_f1_macro"] == pytest.approx(1 / 3)
+    assert evaluation["eval_recall_macro"] == 0.5
     payload, persisted_signature, source = load_persisted_weights()
     assert payload == main._global_weights_path().read_bytes()
     assert persisted_signature == signature
@@ -290,17 +290,63 @@ def test_status_reports_registered_and_trainable_client_counts(monkeypatch, tmp_
     assert payload["trainable_clients"] == 1
 
 
-def test_status_optionally_returns_persisted_round_metrics(monkeypatch, tmp_path):
+def test_metrics_return_latest_round_and_history(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(main, "_client_counts", lambda: (2, 1, set()))
     payload = {
         "session_id": "session-1",
-        "rounds": [{"round_id": 1, "server": {"aggregation_seconds": 0.25}}],
+        "rounds": [
+            {
+                "round_id": 1,
+                "client_training": {"client-a": {"train_loss": 0.5}},
+                "evaluation_metrics": {"eval_accuracy": 0.75},
+                "server": {"aggregation_seconds": 0.25},
+            }
+        ],
     }
     main._write_json(main._round_metrics_path(), payload)
 
     assert "round_metrics" not in main.session_status()
-    assert main.session_status(include_round_metrics=True)["round_metrics"] == payload
+    latest = main.metrics()
+    assert latest["session_id"] == "session-1"
+    assert latest["round_id"] == 1
+    assert latest["training"]["client-a"]["train_loss"] == 0.5
+    assert latest["evaluation"]["eval_accuracy"] == 0.75
+    assert main.metrics_history()["rounds"] == [
+        {
+            "round_id": 1,
+            "training": {"client-a": {"train_loss": 0.5}},
+            "evaluation": {"eval_accuracy": 0.75},
+            "server": {"aggregation_seconds": 0.25},
+        }
+    ]
+
+
+def test_metrics_include_active_round_with_pending_evaluation(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    session = main.ActiveSession(
+        session_id="session-active",
+        request=main.SessionStartRequest(expected_rounds=2),
+        all_clients={},
+        active_clients={},
+        model_signature="signature",
+        current_round=2,
+        round_metrics={
+            "2": {
+                "round_id": 2,
+                "client_training": {"client-a": {"train_loss": 0.4}},
+                "server": {"aggregation_seconds": 0.1},
+            }
+        },
+    )
+    monkeypatch.setattr(main, "_active", session)
+
+    payload = main.metrics()
+
+    assert payload["session_id"] == "session-active"
+    assert payload["round_id"] == 2
+    assert payload["training"]["client-a"]["train_loss"] == 0.4
+    assert payload["evaluation"] is None
 
 
 def test_refresh_clients_immediately_refreshes_registry(monkeypatch):

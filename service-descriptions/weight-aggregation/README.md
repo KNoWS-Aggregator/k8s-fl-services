@@ -70,7 +70,7 @@ service normally call.
 | --- | --- | --- |
 | `POST /session/start` | `researcher` | Start an asynchronous session; return `202` and its generated ID. |
 | `POST /refresh-clients` | `researcher` | Refresh discovery; return added and removed service URLs. |
-| `GET /status` | `researcher` | Return session state plus registered and trainable client counts; `include_round_metrics=true` also returns timing and peak-RAM metrics for every completed round in the latest session. |
+| `GET /status` | `researcher` | Return session state plus registered and trainable client counts. |
 
 ### Start a federated session
 
@@ -185,7 +185,8 @@ endpoints.
 | Dataset/distribution | Role | URL property | Media type | Availability |
 | --- | --- | --- | --- | --- |
 | `aggregated-global-weights/binary` | `researcher` | `dcat:downloadURL` | `application/octet-stream` | Latest successful session's `global-weights.npz`; `404` before one completes. |
-| `aggregated-evaluation-metrics/json` | `researcher` | `dcat:accessURL` | `application/json` | Latest aggregate evaluation metrics; `404` before evaluation completes. |
+| `metrics/json` | `researcher` | `dcat:accessURL` | `application/json` | Client-training, aggregated evaluation, and server metrics for the latest round. |
+| `metrics-history/json` | `researcher` | `dcat:accessURL` | `application/json` | The same metrics for every round in the latest session. |
 
 The global model is atomically replaced only after a successful final round.
 Failed-session and in-progress weights are never exposed.
@@ -202,23 +203,23 @@ Accept: application/octet-stream
 Save the response bytes using the `Content-Disposition` filename
 `global-weights.npz`; do not parse the response as JSON.
 
-Read the aggregate evaluation document with:
+Read the latest federation metrics with:
 
 ```http
-GET /research/services/coordinator/evaluation-metrics HTTP/1.1
+GET /research/services/coordinator/metrics HTTP/1.1
 Host: aggregator.example
 Authorization: Bearer <researcher-token>
 Accept: application/json
 ```
 
-The document contains session and round context, total evaluated examples,
-weighted loss, accuracy, macro and weighted F1, macro precision and recall,
-per-class scores, and the summed confusion matrix. Included optional fields
-depend on the completed evaluation.
+The document contains session and round context, per-client training metrics,
+aggregated test-set evaluation metrics, and coordinator timing and memory
+metrics. During an active round, evaluation is `null` until it completes. Use
+`GET /metrics/history` for all rounds in the latest session.
 
 ## Definition files
 
 - [`profile.yaml`](profile.yaml) defines operations, the `training-client` and
-  `researcher` roles, and both output datasets.
+  `researcher` roles, and the output datasets.
 - [`deployment-function.yaml`](deployment-function.yaml) binds the interface
   and deployment inputs to the coordinator workload.

@@ -7,7 +7,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TF_CPP_MIN_LOG_LEVEL=3 \
     DATA_DIR=/app/data \
-    RESULTS_DIR=/app/data/model-training/results \
     PORT=8080
 
 WORKDIR /app

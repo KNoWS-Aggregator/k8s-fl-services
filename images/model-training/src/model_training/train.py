@@ -1,7 +1,6 @@
 """Training logic for the Training Job container."""
 import gc
 import json
-import os
 import resource
 import time
 import warnings
@@ -23,13 +22,7 @@ from common.weight_io import bytes_to_weights, weights_to_bytes
 
 from fl_model import load_model
 from .data_pipeline import ACTIVITIES
-from .support import (
-    get_class_weights,
-    get_save_name,
-    load_data,
-    round_dir,
-    save_training_history,
-)
+from .support import get_class_weights, load_data, round_dir
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -78,7 +71,6 @@ def run_training(
     model.set_weights(bytes_to_weights(global_weights))
 
     cfg = config
-    save_name = get_save_name(cfg)
     datasets = load_data(cfg)
     train = datasets["train"]
     validation = datasets["val"]
@@ -112,12 +104,6 @@ def run_training(
 
     train_accuracy = final_history_value("accuracy")
 
-    save_training_history(
-        n_round=msg.round_id,
-        client_name=f"client_{msg.client_id}",
-        history=history.history,
-        base_path=Path(os.getenv("RESULTS_DIR", "/app/data/model-training/results")) / save_name,
-    )
     local_weights = weights_to_bytes(model.get_weights())
 
     result = TrainingResultMessage(

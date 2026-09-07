@@ -89,7 +89,8 @@ reported number of examples.
 - `POST /evaluation-results`
 - `GET /status`
 - `GET /weights`
-- `GET /evaluation-metrics`
+- `GET /metrics`
+- `GET /metrics/history`
 - `GET /healthz`
 - `GET /readyz`
 
@@ -115,14 +116,9 @@ macro precision and recall, and per-class scores are derived from that summed
 matrix. Both per-client and aggregated metrics are persisted. Only then does it
 start the next training round or complete the session.
 
-The most recent aggregate is available from `GET /evaluation-metrics` and at:
-
-```text
-/app/data/weight-aggregation/evaluation-metrics.json
-```
-
-Per-round timing and memory metrics are available from
-`GET /status?include_round_metrics=true` and are persisted at
+The latest round's client-training, aggregated evaluation, timing, and memory
+metrics are available from `GET /metrics`. The same data for every round in the
+latest session is available from `GET /metrics/history` and persisted at
 `/app/data/weight-aggregation/round-metrics.json`.
 Each round contains client setup, training, total duration, and peak RSS,
 plus coordinator dispatch, result collection, messaging-overhead estimate,
