@@ -184,11 +184,13 @@ endpoints.
 
 | Dataset/distribution | Role | URL property | Media type | Availability |
 | --- | --- | --- | --- | --- |
-| `aggregated-global-weights/binary` | `researcher` | `dcat:downloadURL` | `application/octet-stream` | Latest successful session's `global-weights.npz`; `404` before one completes. |
+| `aggregated-global-weights/binary` | `researcher` | `dcat:downloadURL` | `application/octet-stream` | Latest available global model, including an in-progress aggregate; `404` before weights are available. |
 | `aggregated-evaluation-metrics/json` | `researcher` | `dcat:accessURL` | `application/json` | Latest aggregate evaluation metrics; `404` before evaluation completes. |
 
-The global model is atomically replaced only after a successful final round.
-Failed-session and in-progress weights are never exposed.
+The completed-session global model is atomically replaced only after a
+successful final round. During training, the endpoint serves the newest
+available aggregate from the active session. Failed-session checkpoints are
+removed and do not replace the last successful model.
 
 Download the model using its advertised distribution URL:
 

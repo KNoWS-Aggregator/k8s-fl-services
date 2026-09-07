@@ -129,9 +129,13 @@ plus coordinator dispatch, result collection, messaging-overhead estimate,
 weight aggregation duration, and peak RSS. Durations are seconds and memory
 values are bytes.
 
-The latest global model from a successfully completed session is downloadable
-from `GET /weights`. Before the first successful session this endpoint returns
-`404`; in-progress round weights are never exposed.
+The latest global model is downloadable from `GET /weights`. During an active
+session this is the newest aggregate available, including a partial aggregate
+while the current round is still collecting client results. Before any model
+weights are available this endpoint returns `404`.
+
+`GET /status` includes `session_started_at` for the active or latest session
+and `round_started_at` for the current round, both as UTC ISO 8601 timestamps.
 
 ## Container
 

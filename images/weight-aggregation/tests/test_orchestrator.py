@@ -93,6 +93,10 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
     assert response["status"] == "initializing"
     assert session is not None
     assert session.current_round == 1
+    status_payload = main.session_status()
+    assert status_payload["session_started_at"] == session.session_started_at
+    assert status_payload["round_started_at"] == session.round_started_at
+    assert status_payload["round_started_at"] is not None
     assert len(session.active_clients) == 2
     assert len(set(session.active_clients)) == 2
     assert dispatched["round_id"] == 1
@@ -111,6 +115,10 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
             ),
             local,
         )
+        if client_id == client_ids[0]:
+            response = main.global_weights()
+            assert response.path == main._in_progress_global_weights_path()
+            assert bytes_to_weights(response.path.read_bytes())[0][0] == pytest.approx(2.0)
 
     matrices = ([[1, 0], [0, 0]], [[0, 0], [1, 0]])
     per_class = {"Walking": {}, "Sitting": {}}
@@ -288,6 +296,19 @@ def test_status_reports_registered_and_trainable_client_counts(monkeypatch, tmp_
     assert payload["status"] == "idle"
     assert payload["registered_clients"] == 3
     assert payload["trainable_clients"] == 1
+
+
+def test_global_weights_download_serves_active_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    payload = weights_to_bytes([np.array([3.0])])
+    live_path = main._in_progress_global_weights_path()
+    live_path.parent.mkdir(parents=True)
+    live_path.write_bytes(payload)
+
+    response = main.global_weights()
+
+    assert response.path == live_path
+    assert bytes_to_weights(response.path.read_bytes())[0][0] == pytest.approx(3.0)
 
 
 def test_status_optionally_returns_persisted_round_metrics(monkeypatch, tmp_path):

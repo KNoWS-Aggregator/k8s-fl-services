@@ -80,6 +80,8 @@ class ActiveSession:
     all_clients: dict[str, str]
     active_clients: dict[str, str]
     model_signature: str
+    session_started_at: str = ""
+    round_started_at: str | None = None
     current_round: int = 0
     global_weights: bytes = b""
     expected_clients: set[str] = field(default_factory=set)
@@ -116,6 +118,10 @@ def _status_path() -> Path:
 
 def _global_weights_path() -> Path:
     return _data_dir() / "global-weights.npz"
+
+
+def _in_progress_global_weights_path() -> Path:
+    return _data_dir() / "global-weights-in-progress.npz"
 
 
 def _global_metadata_path() -> Path:
@@ -283,6 +289,8 @@ def _persist_session(session: ActiveSession, state: str) -> None:
             "min_clients": session.request.min_clients,
             "round_timeout_seconds": session.request.round_timeout_seconds,
             "training_config": session.request.training_config.model_dump(mode="json"),
+            "session_started_at": session.session_started_at,
+            "round_started_at": session.round_started_at,
             "current_round": session.current_round,
             "all_clients": session.all_clients,
             "active_clients": session.active_clients,
@@ -396,6 +404,7 @@ def _bootstrap_session(
     session_id: str,
     request: SessionStartRequest,
     candidate_urls: set[str],
+    session_started_at: str,
 ) -> None:
     global _active
     assigned = {
@@ -412,6 +421,7 @@ def _bootstrap_session(
         all_clients=assigned,
         active_clients={},
         model_signature="",
+        session_started_at=session_started_at,
     )
     _persist_session(initializing, "initializing")
     accepted: dict[str, str] = {}
@@ -452,9 +462,12 @@ def _bootstrap_session(
             active_clients=accepted.copy(),
             model_signature=canonical_signature,
             global_weights=global_weights,
+            session_started_at=session_started_at,
         )
         with _coordinator_lock:
             _active = session
+            _in_progress_global_weights_path().parent.mkdir(parents=True, exist_ok=True)
+            _in_progress_global_weights_path().write_bytes(global_weights)
             _write_status(
                 {
                     "status": "running",
@@ -462,7 +475,9 @@ def _bootstrap_session(
                     "current_round": 0,
                     "expected_rounds": request.expected_rounds,
                     "initial_weights_source": source,
-                    "started_at": _now(),
+                    "session_started_at": session.session_started_at,
+                    "round_started_at": session.round_started_at,
+                    "started_at": session.session_started_at,
                 }
             )
             _persist_session(session, "running")
@@ -476,8 +491,10 @@ def _bootstrap_session(
             all_clients=assigned,
             active_clients=accepted,
             model_signature="",
+            session_started_at=session_started_at,
         )
         _release_clients(temporary)
+        _in_progress_global_weights_path().unlink(missing_ok=True)
         with _coordinator_lock:
             _active = None
             _write_status(
@@ -485,6 +502,7 @@ def _bootstrap_session(
                     "status": "failed",
                     "session_id": session_id,
                     "error": str(exc),
+                    "session_started_at": session_started_at,
                     "finished_at": _now(),
                 }
             )
@@ -499,6 +517,7 @@ def _start_round(session: ActiveSession) -> None:
             _finish_session(session, False, "Client count fell below min_clients")
             return
         session.current_round += 1
+        session.round_started_at = _now()
         session.expected_clients = set(session.active_clients)
         session.weights_by_client = {}
         session.metrics_by_client = {}
@@ -527,7 +546,9 @@ def _start_round(session: ActiveSession) -> None:
                 "expected_rounds": session.request.expected_rounds,
                 "active_clients": len(session.active_clients),
                 "phase": session.phase,
-                "started_at": _now(),
+                "session_started_at": session.session_started_at,
+                "round_started_at": session.round_started_at,
+                "started_at": session.round_started_at,
             }
         )
         logger.info(
@@ -652,6 +673,10 @@ def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
         (round_dir / "aggregate-current.npz").write_bytes(
             session.current_aggregated_weights
         )
+        live_path = _in_progress_global_weights_path()
+        temporary = live_path.with_suffix(live_path.suffix + ".tmp")
+        temporary.write_bytes(session.current_aggregated_weights)
+        temporary.replace(live_path)
         _advance_if_ready(session)
 
 
@@ -711,7 +736,9 @@ def _start_evaluation(session: ActiveSession) -> None:
                 "expected_rounds": session.request.expected_rounds,
                 "active_clients": len(session.active_clients),
                 "phase": session.phase,
-                "started_at": _now(),
+                "session_started_at": session.session_started_at,
+                "round_started_at": session.round_started_at,
+                "started_at": session.round_started_at,
             }
         )
         logger.info(
@@ -912,6 +939,9 @@ def _finish_session(
                 "updated_at": _now(),
             },
         )
+        _in_progress_global_weights_path().unlink(missing_ok=True)
+    else:
+        _in_progress_global_weights_path().unlink(missing_ok=True)
     state = "succeeded" if success else "failed"
     log = logger.info if success else logger.error
     log(
@@ -927,6 +957,8 @@ def _finish_session(
             "completed_rounds": session.current_round,
             "failed_clients": session.failed_clients,
             "evaluation_metrics": session.aggregated_evaluation_metrics,
+            "session_started_at": session.session_started_at,
+            "round_started_at": session.round_started_at,
             "error": error,
             "finished_at": _now(),
         }
@@ -954,11 +986,14 @@ def _recover_interrupted_session() -> None:
                 logger.exception(
                     "Could not release client %s from interrupted session", client_id
                 )
+    _in_progress_global_weights_path().unlink(missing_ok=True)
     _write_status(
         {
             "status": "failed",
             "session_id": session_id,
             "error": "Aggregation service restarted during an active session",
+            "session_started_at": current.get("session_started_at"),
+            "round_started_at": current.get("round_started_at"),
             "finished_at": _now(),
         }
     )
@@ -992,6 +1027,7 @@ def session_start(
                 detail="min_clients exceeds trainable clients",
             )
         session_id = str(uuid.uuid4())
+        session_started_at = _now()
         # Reserve the coordinator immediately while client bootstrap runs.
         _active = ActiveSession(
             session_id=session_id,
@@ -999,11 +1035,24 @@ def session_start(
             all_clients={},
             active_clients={},
             model_signature="",
+            session_started_at=session_started_at,
         )
         _write_status(
-            {"status": "initializing", "session_id": session_id, "started_at": _now()}
+            {
+                "status": "initializing",
+                "session_id": session_id,
+                "session_started_at": session_started_at,
+                "round_started_at": None,
+                "started_at": session_started_at,
+            }
         )
-    background_tasks.add_task(_bootstrap_session, session_id, request, candidate_urls)
+    background_tasks.add_task(
+        _bootstrap_session,
+        session_id,
+        request,
+        candidate_urls,
+        session_started_at,
+    )
     return {"status": "initializing", "session_id": session_id}
 
 
@@ -1099,8 +1148,10 @@ def refresh_clients() -> dict[str, list[str]]:
 
 @app.get("/weights", response_class=FileResponse)
 def global_weights() -> FileResponse:
-    """Download the latest global model from a successfully completed session."""
-    path = _global_weights_path()
+    """Download the latest global model, including an active session checkpoint."""
+    with _coordinator_lock:
+        live_path = _in_progress_global_weights_path()
+        path = live_path if live_path.is_file() else _global_weights_path()
     if not path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
