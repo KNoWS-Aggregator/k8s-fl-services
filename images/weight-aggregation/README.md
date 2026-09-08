@@ -94,11 +94,13 @@ reported number of examples.
 - `GET /healthz`
 - `GET /readyz`
 
-`GET /status` includes `registered_clients` and `trainable_clients`. The latter
-is determined by probing each registered training service: it must have a valid
-prepared dataset and must either be unassigned or assigned to this coordinator's
-current session. Unreachable services and services assigned to another
-coordinator are not trainable.
+`GET /status` includes `session_started_at`, `round_started_at`,
+`registered_clients`, and `trainable_clients`. `round_started_at` is `null`
+until the first round starts. Trainability is determined by probing each
+registered training service: it must have a valid prepared dataset and must
+either be unassigned or assigned to this coordinator's current session.
+Unreachable services and services assigned to another coordinator are not
+trainable.
 
 ## Logical service description
 

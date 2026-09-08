@@ -131,14 +131,18 @@ context, plus:
   "status": "running",
   "session_id": "<generated-uuid>",
   "round_id": 1,
+  "session_started_at": "2026-09-08T10:00:00+00:00",
+  "round_started_at": "2026-09-08T10:00:03+00:00",
   "registered_clients": 3,
   "trainable_clients": 3
 }
 ```
 
-Additional fields depend on the phase or failure. A registered client is
-trainable only when it is reachable, has valid prepared data, and is not
-assigned to another coordinator session.
+Additional fields depend on the phase or failure. `session_started_at` records
+when initialization began; `round_started_at` records when the current round
+began and is `null` before the first round. A registered client is trainable
+only when it is reachable, has valid prepared data, and is not assigned to
+another coordinator session.
 
 ### Refresh client discovery
 

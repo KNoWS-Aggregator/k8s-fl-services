@@ -113,8 +113,15 @@ def test_completed_round_is_cached_and_duplicate_is_re_reported(monkeypatch, tmp
 
     accepted, tasks = _request(_message())
     assert accepted["status"] == "accepted"
+    running_status = main.training_status()
+    assert "started_at" not in running_status
+    assert running_status["session_started_at"]
+    assert running_status["round_started_at"]
     _run_tasks(tasks)
-    assert main.training_status()["status"] == "succeeded"
+    succeeded_status = main.training_status()
+    assert succeeded_status["status"] == "succeeded"
+    assert succeeded_status["session_started_at"] == running_status["session_started_at"]
+    assert succeeded_status["round_started_at"] == running_status["round_started_at"]
 
     duplicate, duplicate_tasks = _request(_message())
     assert duplicate["status"] == "already_completed"
@@ -322,6 +329,10 @@ def test_training_client_session_assignment(monkeypatch, tmp_path):
     started = main.session_start(request)
     assert started["status"] == "started"
     assert main._read_session() == request
+    active_status = main.training_status()
+    assert "started_at" not in active_status
+    assert active_status["session_started_at"]
+    assert active_status["round_started_at"] is None
     assert main.session_start(request)["status"] == "already_started"
 
     with pytest.raises(HTTPException) as conflict:
@@ -338,3 +349,6 @@ def test_training_client_session_assignment(monkeypatch, tmp_path):
         main.ClientSessionEnd(session_id="session-a", client_id="client-a")
     ) == {"status": "ended"}
     assert main._read_session() is None
+    ended_status = main.training_status()
+    assert ended_status["session_started_at"] == active_status["session_started_at"]
+    assert ended_status["round_started_at"] is None

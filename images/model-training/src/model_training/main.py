@@ -93,6 +93,32 @@ def _write_status(payload: dict[str, Any]) -> None:
         temporary.replace(path)
 
 
+def _status_timestamps(
+    session_id: str,
+    round_id: int | None = None,
+    *,
+    new_round: bool = False,
+) -> dict[str, str | None]:
+    current = _read_status()
+    same_session = current.get("session_id") == session_id
+    now = _now()
+    session_started_at = (
+        current.get("session_started_at") if same_session else None
+    ) or now
+    same_round = same_session and current.get("round_id") == round_id
+    round_started_at = (
+        now
+        if new_round
+        else current.get("round_started_at") if same_round or round_id is None else None
+    )
+    if round_id is not None and round_started_at is None:
+        round_started_at = now
+    return {
+        "session_started_at": session_started_at,
+        "round_started_at": round_started_at,
+    }
+
+
 def _prepared_data_status() -> dict[str, Any]:
     data_dir = _data_dir()
     paths = (
@@ -349,13 +375,15 @@ def session_start(request: ClientSessionStart) -> dict[str, Any]:
         )
     _write_session(request)
     _, signature = create_initial_weights()
+    session_started_at = _now()
     _write_status(
         {
             "status": "session_active",
             "session_id": request.session_id,
             "client_id": request.client_id,
             "expected_rounds": request.expected_rounds,
-            "started_at": _now(),
+            "session_started_at": session_started_at,
+            "round_started_at": None,
         }
     )
     logger.info("Session started (session=%s, client=%s)", request.session_id, request.client_id)
@@ -377,12 +405,14 @@ def session_end(request: ClientSessionEnd) -> dict[str, str]:
             status_code=status.HTTP_409_CONFLICT,
             detail="Session end request does not match the active assignment",
         )
+    timestamps = _status_timestamps(request.session_id)
     _session_path().unlink(missing_ok=True)
     _write_status(
         {
             "status": "session_ended",
             "session_id": request.session_id,
             "client_id": request.client_id,
+            **timestamps,
             "finished_at": _now(),
         }
     )
@@ -439,7 +469,7 @@ async def train_endpoint(
                 "session_id": msg.session_id,
                 "round_id": msg.round_id,
                 "client_id": msg.client_id,
-                "started_at": _now(),
+                **_status_timestamps(msg.session_id, msg.round_id, new_round=True),
                 "finished_at": None,
             }
         )
@@ -505,7 +535,7 @@ async def evaluate_endpoint(
                 "session_id": msg.session_id,
                 "round_id": msg.round_id,
                 "client_id": msg.client_id,
-                "started_at": _now(),
+                **_status_timestamps(msg.session_id, msg.round_id),
                 "finished_at": None,
             }
         )
@@ -534,8 +564,10 @@ def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> 
         _write_status(
             {
                 "status": "failed",
+                "session_id": msg.session_id,
                 "round_id": msg.round_id,
                 "client_id": msg.client_id,
+                **_status_timestamps(msg.session_id, msg.round_id),
                 "finished_at": _now(),
                 "error": str(exc),
             }
@@ -562,8 +594,10 @@ def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> 
         _write_status(
             {
                 "status": "reporting",
+                "session_id": msg.session_id,
                 "round_id": msg.round_id,
                 "client_id": msg.client_id,
+                **_status_timestamps(msg.session_id, msg.round_id),
                 "finished_at": _now(),
             }
         )
@@ -574,8 +608,10 @@ def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> 
             _write_status(
                 {
                     "status": "report_failed",
+                    "session_id": msg.session_id,
                     "round_id": msg.round_id,
                     "client_id": msg.client_id,
+                    **_status_timestamps(msg.session_id, msg.round_id),
                     "finished_at": _now(),
                     "error": str(exc),
                 }
@@ -585,8 +621,10 @@ def _run_and_report(msg: TrainingInitMessage, config, global_weights: bytes) -> 
             _write_status(
                 {
                     "status": "succeeded",
+                    "session_id": msg.session_id,
                     "round_id": msg.round_id,
                     "client_id": msg.client_id,
+                    **_status_timestamps(msg.session_id, msg.round_id),
                     "finished_at": _now(),
                 }
             )
@@ -619,8 +657,10 @@ def _run_evaluation_and_report(
         _write_status(
             {
                 "status": "evaluation_failed",
+                "session_id": msg.session_id,
                 "round_id": msg.round_id,
                 "client_id": msg.client_id,
+                **_status_timestamps(msg.session_id, msg.round_id),
                 "finished_at": _now(),
                 "error": str(exc),
             }
@@ -651,8 +691,10 @@ def _run_evaluation_and_report(
             _write_status(
                 {
                     "status": "evaluation_report_failed",
+                    "session_id": msg.session_id,
                     "round_id": msg.round_id,
                     "client_id": msg.client_id,
+                    **_status_timestamps(msg.session_id, msg.round_id),
                     "finished_at": _now(),
                     "error": str(exc),
                 }
@@ -661,8 +703,10 @@ def _run_evaluation_and_report(
             _write_status(
                 {
                     "status": "evaluation_succeeded",
+                    "session_id": msg.session_id,
                     "round_id": msg.round_id,
                     "client_id": msg.client_id,
+                    **_status_timestamps(msg.session_id, msg.round_id),
                     "finished_at": _now(),
                 }
             )

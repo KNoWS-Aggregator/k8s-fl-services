@@ -113,7 +113,10 @@ make containers-push CONTAINER=model-training TAG=0.1.0
 - `GET /healthz` provides a process liveness check.
 - `GET /readyz` verifies prepared Parquet inputs and shared-volume write access.
 - `GET /status` returns the persistent state of the most recent round together
-  with `prepared_data.valid`, the current session assignment, and `trainable`.
+  with `session_started_at`, `round_started_at`, `prepared_data.valid`, the
+  current session assignment, and `trainable`. `round_started_at` is `null`
+  until the first round starts, and both timestamps are preserved through the
+  round result and session end states.
   An updating preparation remains valid when a previously published generation
   and both prepared Parquet files still exist. The first preparation is not
   trainable until its initial generation has been published.

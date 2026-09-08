@@ -89,7 +89,7 @@ endpoints directly.
 | `POST /session/end` | Release that session assignment. |
 | `POST /train` | Supply global weights and start one local training round. |
 | `POST /evaluate` | Supply aggregated weights for local evaluation. |
-| `GET /status` | Let the coordinator determine preparation validity, assignment, and trainability. |
+| `GET /status` | Let the coordinator determine preparation validity, assignment, trainability, and session/round start times. |
 
 Training and evaluation results are sent asynchronously to the coordinator's
 `/training-results` and `/evaluation-results` endpoints. These protocol routes

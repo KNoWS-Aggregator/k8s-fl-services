@@ -142,11 +142,20 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
         main.SessionStartRequest(expected_rounds=1),
         tasks,
     )
+    initializing_status = main._read_status()
+    assert "started_at" not in initializing_status
+    assert initializing_status["session_started_at"]
+    assert initializing_status["round_started_at"] is None
     _run_tasks(tasks)
 
     session = main._active
+    running_status = main._read_status()
     assert response["status"] == "initializing"
     assert session is not None
+    assert "started_at" not in running_status
+    assert running_status["session_started_at"] == session.session_started_at
+    assert running_status["round_started_at"] == session.round_started_at
+    assert running_status["round_started_at"]
     assert session.current_round == 1
     assert len(session.active_clients) == 2
     assert len(set(session.active_clients)) == 2
@@ -186,6 +195,10 @@ def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, t
         )
 
     assert main._active is None
+    completed_status = main._read_status()
+    assert "started_at" not in completed_status
+    assert completed_status["session_started_at"] == session.session_started_at
+    assert completed_status["round_started_at"] == session.round_started_at
     promoted = bytes_to_weights(main._global_weights_path().read_bytes())
     assert np.allclose(promoted[0], np.array([3.0]))
     evaluation = main.metrics()["evaluation"]
