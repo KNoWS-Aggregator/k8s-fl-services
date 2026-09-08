@@ -122,6 +122,22 @@ def _global_metadata_path() -> Path:
     return _data_dir() / "global-weights.json"
 
 
+def _latest_weights_path() -> Path:
+    """Return the latest active-session aggregate or the promoted global model."""
+    with _coordinator_lock:
+        session = _active
+        if session:
+            candidates = [
+                path
+                for pattern in ("round_*/aggregate-current.npz", "round_*/aggregated.npz")
+                for path in _session_dir(session.session_id).glob(pattern)
+                if path.is_file()
+            ]
+            if candidates:
+                return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+    return _global_weights_path()
+
+
 def _round_metrics_path() -> Path:
     return _data_dir() / "round-metrics.json"
 
@@ -649,9 +665,10 @@ def _record_result(result: TrainingResultMessage, weights: bytes) -> None:
             time.perf_counter() - aggregation_started
         )
         round_metrics["server"]["peak_ram_bytes"] = _peak_ram_bytes()
-        (round_dir / "aggregate-current.npz").write_bytes(
-            session.current_aggregated_weights
-        )
+        aggregate_path = round_dir / "aggregate-current.npz"
+        temporary = aggregate_path.with_suffix(".npz.tmp")
+        temporary.write_bytes(session.current_aggregated_weights)
+        temporary.replace(aggregate_path)
         _advance_if_ready(session)
 
 
@@ -1134,12 +1151,12 @@ def refresh_clients() -> dict[str, list[str]]:
 
 @app.get("/weights", response_class=FileResponse)
 def global_weights() -> FileResponse:
-    """Download the latest global model from a successfully completed session."""
-    path = _global_weights_path()
+    """Download the newest global weights, including an active-session checkpoint."""
+    path = _latest_weights_path()
     if not path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No completed global weights are available",
+            detail="No global weights are available",
         )
     return FileResponse(
         path,

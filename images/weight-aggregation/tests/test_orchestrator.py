@@ -27,8 +27,9 @@ def _run_tasks(tasks):
         task.func(*task.args, **task.kwargs)
 
 
-def test_global_weights_download_serves_only_promoted_model(monkeypatch, tmp_path):
+def test_global_weights_download_serves_promoted_model(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "_active", None)
 
     with pytest.raises(HTTPException) as missing:
         main.global_weights()
@@ -44,6 +45,60 @@ def test_global_weights_download_serves_only_promoted_model(monkeypatch, tmp_pat
     assert response.path == path
     assert response.media_type == "application/octet-stream"
     assert response.headers["content-disposition"] == 'attachment; filename="global-weights.npz"'
+
+
+def test_global_weights_download_prefers_latest_active_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    promoted = main._global_weights_path()
+    promoted.parent.mkdir(parents=True)
+    promoted.write_bytes(b"promoted")
+
+    session = main.ActiveSession(
+        session_id="session-1",
+        request=main.SessionStartRequest(expected_rounds=2),
+        all_clients={},
+        active_clients={},
+        model_signature="signature",
+        current_round=2,
+    )
+    monkeypatch.setattr(main, "_active", session)
+    previous_round = main._session_dir(session.session_id) / "round_1" / "aggregated.npz"
+    previous_round.parent.mkdir(parents=True)
+    previous_round.write_bytes(b"previous-round")
+
+    assert main.global_weights().path == previous_round
+
+    current_round = main._session_dir(session.session_id) / "round_2" / "aggregate-current.npz"
+    current_round.parent.mkdir(parents=True)
+    current_round.write_bytes(b"current-round")
+
+    response = main.global_weights()
+
+    assert response.path == current_round
+    assert response.media_type == "application/octet-stream"
+    assert response.headers["content-disposition"] == 'attachment; filename="global-weights.npz"'
+
+
+def test_global_weights_download_falls_back_while_active_checkpoint_is_unavailable(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    promoted = main._global_weights_path()
+    promoted.parent.mkdir(parents=True)
+    promoted.write_bytes(b"promoted")
+    monkeypatch.setattr(
+        main,
+        "_active",
+        main.ActiveSession(
+            session_id="session-1",
+            request=main.SessionStartRequest(expected_rounds=1),
+            all_clients={},
+            active_clients={},
+            model_signature="signature",
+        ),
+    )
+
+    assert main.global_weights().path == promoted
 
 
 def test_session_bootstrap_aggregates_and_promotes_global_weights(monkeypatch, tmp_path):

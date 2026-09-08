@@ -184,12 +184,13 @@ endpoints.
 
 | Dataset/distribution | Role | URL property | Media type | Availability |
 | --- | --- | --- | --- | --- |
-| `aggregated-global-weights/binary` | `researcher` | `dcat:downloadURL` | `application/octet-stream` | Latest successful session's `global-weights.npz`; `404` before one completes. |
+| `aggregated-global-weights/binary` | `researcher` | `dcat:downloadURL` | `application/octet-stream` | Latest active-session aggregate checkpoint, falling back to the latest successful session's `global-weights.npz`; `404` when neither exists. |
 | `metrics/json` | `researcher` | `dcat:accessURL` | `application/json` | Client-training, aggregated evaluation, and server metrics for the latest round. |
 | `metrics-history/json` | `researcher` | `dcat:accessURL` | `application/json` | The same metrics for every round in the latest session. |
 
-The global model is atomically replaced only after a successful final round.
-Failed-session and in-progress weights are never exposed.
+The promoted global model is atomically replaced only after a successful final
+round. While a session is active, its latest aggregate checkpoint is exposed
+and atomically updated after each client result.
 
 Download the model using its advertised distribution URL:
 
