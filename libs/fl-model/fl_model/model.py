@@ -8,6 +8,7 @@ import keras.layers as tfkl
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     import tensorflow as tf
+    import tensorflow_probability as tfp
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -41,7 +42,7 @@ class RotationLayer(tfkl.Layer):
             batch = tf.shape(x)[0]
             randnormal = tf.random.normal((batch, 3, 3))
             qrinput = randnormal * self.intensity + (1.0 - self.intensity) * tf.eye(3)
-            q, _ = tf.linalg.qr(qrinput)
+            q = tfp.math.gram_schmidt(qrinput)
             return tf.transpose(tf.matmul(q, x, transpose_b=True), [0, 2, 1])
         return noised() if training else x
 
