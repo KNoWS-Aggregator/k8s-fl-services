@@ -6,6 +6,7 @@ dependencies = [
     "keras",
     "tensorflow",
     "tensorflow-probability",
+    "tf_keras",
 ]
 
 [build-system]
